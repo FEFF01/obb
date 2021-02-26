@@ -1,6 +1,6 @@
 {
   "name": "obb",
-  "version": "0.0.0",
+  "version": "0.0.2",
   "description": "Simple and lite observer utility",
   "main": "./dist/js/obb.js",
   "private": false,
@@ -13,7 +13,8 @@
     "es6"
   ],
   "repository": {
-    "type": "git"
+    "type": "git",
+    "url": "git://github.com/FEFF01/obb"
   },
   "scripts": {
     "build": "webpack --config webpack/webpack.config.js",
