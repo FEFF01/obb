@@ -39,6 +39,28 @@ function log(expr: any, ...values: any) {
     console.log(expr, ...values);
 }
 // -------------
+console.log(map)
+autorun(() => {
+    console.log(map.get("a"))
+    autorun(() => {
+        console.log(map.keys());
+        for (let key of map.keys()) {
+            autorun(() => {
+                let value = map.get(key);
+                console.log(key, value, value instanceof Array && value[0]);
+            })
+        }
+    })
+})
+log("-------------", `map.get("a")[0] = 2`)
+map.get("a")[0] = 2;
+
+log("-------------", `map.set("a", [3]);`)
+map.set("a", [3]);
+log("-------------", `map.set("b", [4]);`)
+map.set("b", [4]);
+log("-------------")
+
 
 autorun(() => {
     log("array[Symbol.iterator]().next().value", array[Symbol.iterator]().next());

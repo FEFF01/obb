@@ -40,13 +40,19 @@ declare class Observer<T extends object = any> {
 }
 declare class Subscriber {
     fn: Function;
+    parent: Subscriber;
+    children: Array<Subscriber>;
     constructor(fn: Function);
     private _deps;
     undepend(set: ISubscriberSet): void;
     depend(set: ISubscriberSet): void;
     release(): void;
+    unmount(): void;
+    mount(): any;
     update(): any;
-    notify(record?: IRecord): any;
+    addRecord(record: IRecord): void;
+    is_run: boolean;
+    private _run;
 }
 declare function atomic(fn: Function): any;
 declare function runAtomic(fn: Function): any;

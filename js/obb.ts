@@ -59,15 +59,16 @@ const enum RECORD_TYPE {
 
 type ISubscriberSet = Set<Subscriber>;
 
+type IRelations = WeakMap<Subscriber, IRelations>;
+
 
 // ------------------------------------------------------
-
-const SUBSCRIBER_STACK: Array<Subscriber> = [];
+const SUBSCRIBER_STACK: Array<Subscriber | null> = [];
 
 const REACTION_STATE_LIST: Array<IReactionState> = [];
 const REACTION_TARGET_LIST: Array<Subscriber> = [];
 
-const ACTION_STACK: Array<IAction> = []
+const ACTION_STACK: Array<IAction | null> = []
 
 const OBSERVER_MAP: WeakMap<any, Observer> = new WeakMap();
 
@@ -129,17 +130,15 @@ class Observer<T extends object = any> {
     }
     notify(prop: any, value: any, type: RECORD_TYPE = RECORD_TYPE.REF) {
 
+        if (ACTION_STACK[0] === null) {
+            return;
+        }
         let set = this._map(type).get(prop);
         if (set && set.size) {
-            let record: IRecord = [this, prop, value, type];
-
-            for (let subscriber of Array.from(set)) {
-                if (SUBSCRIBER_STACK.indexOf(subscriber) < 0) {
-                    subscriber.notify(record);
-                } else {
-                    // may be err
-                }
-            }
+            deepReactive(
+                Array.from(set),
+                ACTION_STACK.length && [this, prop, value, type]
+            );
         }
     }
 
@@ -207,8 +206,10 @@ class Observer<T extends object = any> {
 
 }
 
-
 class Subscriber {
+    parent: Subscriber;
+    children: Array<Subscriber> = [];
+
     constructor(public fn: Function) {
     }
     private _deps: Set<ISubscriberSet> = new Set();
@@ -223,24 +224,34 @@ class Subscriber {
     release() {
         this._deps.forEach(ref => ref.delete(this));
         this._deps.clear();
+
+        for (let child of this.children) {
+            child.release();
+            child.parent = undefined;
+        }
+        this.children.length = 0;
+    }
+    unmount() {
+        this.release();
+        let siblings = this.parent?.children;
+        siblings && siblings.splice(siblings.indexOf(this), 1);
+        this.parent = undefined;
+    }
+    mount() {
+        if (this.parent !== undefined) {
+            // 可能存者一个 Subscriber 实例发生递归 mount 或其他复用执行的情况
+            return new Subscriber(this.fn).mount();
+        }
+        this.parent = SUBSCRIBER_STACK[0] || null;
+        this.parent && this.parent.children.push(this);
+        this._run();
+        return this;
     }
     update() {
         this.release();
-
-        SUBSCRIBER_STACK.unshift(this);
-        try {
-            return this.fn();
-        } catch (e) {
-            throw e;
-        } finally {
-            SUBSCRIBER_STACK.shift();
-        }
+        return this._run();
     }
-    notify(record?: IRecord) {
-
-        if (!ACTION_STACK.length) {
-            return this.update();
-        }
+    addRecord(record: IRecord) {
 
         let depth = ACTION_STACK[0][ACTION.DEPTH];
         let index = REACTION_TARGET_LIST.indexOf(this);
@@ -250,6 +261,19 @@ class Subscriber {
             REACTION_TARGET_LIST.unshift(this);
         } else {
             REACTION_STATE_LIST[index][REACTION_STATE.RECORDS].push(record);
+        }
+    }
+    is_run = false;
+    private _run() {
+        this.is_run = true;
+        SUBSCRIBER_STACK.unshift(this);
+        try {
+            return this.fn();
+        } catch (e) {
+            throw e;
+        } finally {
+            SUBSCRIBER_STACK.shift();
+            this.is_run = false;
         }
     }
 }
@@ -274,6 +298,20 @@ function transacts(fn: Function, is_atom?: boolean) {
         transacted();
     }
 }
+/*
+const [without, hollow] = [SUBSCRIBER_STACK, ACTION_STACK].map(
+    stack => function (fn: Function) {
+        stack.unshift(null);
+        try {
+            return fn();
+        } catch (e) {
+            throw e;
+        } finally {
+            stack.shift();
+        }
+    }
+)
+*/
 
 function atomic(fn: Function) {
     return transacts.bind(null, fn, true);
@@ -290,9 +328,9 @@ function runAction(fn: Function) {
 
 function autorun(fn: Function) {
     let sub = new Subscriber(fn);
-    sub.update();
+    sub.mount();
     return function disposer() {
-        sub.release();
+        sub.unmount();
     };
 }
 
@@ -324,10 +362,10 @@ function watch(handle: Function, watcher: (new_value: any, old_value: any) => vo
             value_stack.length = 1;
         }
     });
-    subscriber.update();
+    subscriber.mount();
 
     return function disposer() {
-        subscriber.release();
+        subscriber.unmount();
     }
 }
 
@@ -375,8 +413,6 @@ function transacted() {
             for (let record of state[REACTION_STATE.RECORDS]) {
                 let ob = record[RECORD.OBSERVER];
                 let key = record[RECORD.KEY];
-                let value = record[RECORD.TYPE] !== RECORD_TYPE.OWN ? ob._val(key) : ob._has(key);
-
                 let key_set = obj_map.get(ob);
                 if (key_set) {
                     if (key_set.has(key)) {
@@ -387,8 +423,14 @@ function transacted() {
                 } else {
                     obj_map.set(ob, new Set([key]))
                 }
-
-                if (equal(value, record[RECORD.VALUE])) {
+                if (
+                    equal(
+                        record[RECORD.TYPE] !== RECORD_TYPE.OWN
+                            ? ob._val(key)
+                            : ob._has(key)
+                        , record[RECORD.VALUE]
+                    )
+                ) {
                     continue;
                 }
                 reactions.unshift(subscriber);
@@ -406,15 +448,31 @@ function transacted() {
         REACTION_TARGET_LIST.shift();
         REACTION_STATE_LIST.shift();
     }
+    deepReactive(reactions);
+}
 
-    for (let subscriber of reactions) {
-        if (SUBSCRIBER_STACK.indexOf(subscriber) < 0) {
-            subscriber.update();
+function deepReactive(subs: Array<Subscriber>, record?: IRecord) {
+    let reactions: Array<Subscriber> = [];
+    next: for (let i = 0, sub: Subscriber; i < subs.length; i++) {
+        sub = subs[i];
+
+        while ((sub = sub.parent)) {
+            if (subs.indexOf(sub) >= 0) {
+                subs.splice(i--, 1);
+                continue next;
+            }
+        }
+        sub = subs[i];
+        if (!sub.is_run) {
+            reactions.push(subs[i]);
         } else {
             // may be err
+            debugger;
         }
     }
-
+    for (let sub of reactions) {
+        record ? sub.addRecord(record) : sub.update();
+    }
 }
 
 function equal(a: any, b: any) {
@@ -490,13 +548,16 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         internal_ob.release();
         return ob.release();
     }
+
+    internal_ob._has = prototype.has.bind(target);
+
     internal_ob._val = target instanceof Map || target instanceof WeakMap
         ? function (key: any) {
             return prototype.get.call(target, key);;
-        }
-        : function (value: any) {
+        } : function (value: any) {
             return prototype.has.call(target, value) ? value : MASK_UNDEFINED;
         };
+
 
     let proxyMethods = {
         get(key: any) {
@@ -504,31 +565,38 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             return observable(prototype.get.call(target, key));
         },
         set(key: any, value: any) {
-            let bak_value = prototype.get.call(target, key);
+
+            let has_key = prototype.has.call(target, key);
+            let bak_value = has_key ? prototype.get.call(target, key) : undefined;
             prototype.set.call(target, key, value);
             internal_ob.notify(key, bak_value);
+            has_key || internal_ob.notify(key, false, RECORD_TYPE.OWN)
             return this;
         },
-        add(value: any) {
-            if (!prototype.has.call(target, value)) {
+        add(key: any) {
+            if (!prototype.has.call(target, key)) {
                 runAtomic(() => {
                     let size = _size();
-                    prototype.add.call(target, value);
-                    internal_ob.notify(value, MASK_UNDEFINED);
+                    prototype.add.call(target, key);
                     size !== undefined && ob.notify("size", size);
-                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE);
+                    internal_ob.notify(key, MASK_UNDEFINED);
+                    internal_ob.notify(key, false, RECORD_TYPE.OWN)
+                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
                 });
             }
             return this;
         },
-        delete(value: any) {
-            let res = prototype.delete.call(target, value);
+        delete(key: any) {
+            let get = prototype.get;
+            let value = get ? get.call(target, key) : key;
+            let res = prototype.delete.call(target, key);
             if (res) {
                 runAtomic(() => {
                     let size = _size();
-                    internal_ob.notify(value, value);
                     size !== undefined && ob.notify("size", size);
-                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE);
+                    internal_ob.notify(key, value);
+                    internal_ob.notify(key, true, RECORD_TYPE.OWN);
+                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
                 });
             }
             return res;
@@ -538,26 +606,29 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             if (!size) {
                 return;
             }
-            let values_bak = Array.from(prototype.values.call(target));
-            let args = arguments;
             runAtomic(() => {
-                prototype.clear.apply(target, args);
-                for (let value of values_bak) {
-                    internal_ob.notify(value, value);
-                }
+                prototype.forEach.call(
+                    target,
+                    (value: any, key: any) => {
+                        internal_ob.notify(key, value);
+                        internal_ob.notify(key, true, RECORD_TYPE.OWN);
+                    }
+                )
                 ob.notify("size", size);
-                internal_ob.notify(MASK_ITERATE, MASK_ITERATE);
+                internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+
+                prototype.clear.call(target);
             })
         },
         forEach(cb: Function, ...args: any) {
-            internal_ob.collect(MASK_ITERATE);
+            internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
             return prototype.forEach.call(target, function (value: any, ...rest: any) {
                 cb(observable(value), ...rest)
             }, ...args);
 
         },
         has(value: any) {
-            internal_ob.collect(value);
+            internal_ob.collect(value, RECORD_TYPE.OWN);
             let res = prototype.has.call(target, value);
             return res;
         },
@@ -567,8 +638,8 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                 let original = prototype[key];
                 if (original) {
                     res[key] = function () {
-                        internal_ob.collect(MASK_ITERATE);
-                        return observable(original.apply(target, arguments));
+                        internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
+                        return obIterator(original.apply(target, arguments));
                     }
                 }
                 return res;
