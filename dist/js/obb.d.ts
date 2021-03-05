@@ -1,4 +1,4 @@
-export { Observer, Subscriber, observable, autorun, atomic, runAtomic, action, runAction, computed, watch, reaction, };
+export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, computed, watch, reaction, };
 declare type IOBInternalObject = Set<any> | Map<any, any> | WeakSet<any> | WeakMap<any, any>;
 declare type IOBTarget = Object | IOBInternalObject;
 declare const enum RECORD {
@@ -15,7 +15,11 @@ interface IRecord {
 }
 declare const enum RECORD_TYPE {
     OWN = 1,
-    REF = 2
+    REF = 2,
+    READONLY = 4,
+    VOLATILE = 8,
+    REF_AND_READONLY = 6,
+    REF_AND_VOLATILE = 10
 }
 declare type ISubscriberSet = Set<Subscriber>;
 declare class Observer<T extends object = any> {
@@ -29,7 +33,9 @@ declare class Observer<T extends object = any> {
     notify(prop: any, value: any, type?: RECORD_TYPE): void;
     _has: (key: any) => boolean;
     _val: (key: any) => any;
-    _map(type?: RECORD_TYPE): Map<any, ISubscriberSet>;
+    _del: (key: any) => boolean;
+    _set: (key: any, value: any) => any;
+    _map(type: RECORD_TYPE): Map<any, ISubscriberSet>;
     _proxy_handler: {
         get: (target: IOBTarget, prop: string) => any;
         set: (target: IOBTarget, prop: string, value: any) => boolean;
@@ -54,10 +60,12 @@ declare class Subscriber {
     is_run: boolean;
     private _run;
 }
-declare function atomic(fn: Function): any;
-declare function runAtomic(fn: Function): any;
+declare function atom(fn: Function): any;
+declare function runInAtom(fn: Function): any;
 declare function action(fn: Function): any;
-declare function runAction(fn: Function): any;
+declare function runInAction(fn: Function): any;
+declare function sandbox(fn: Function): any;
+declare function runInSandbox(fn: Function): any;
 declare function autorun(fn: Function): () => void;
 declare function observable(obj: IOBTarget | any): any;
 declare function computed(calc: Function): () => any;

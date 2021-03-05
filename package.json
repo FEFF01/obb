@@ -1,6 +1,6 @@
 {
   "name": "obb",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Simple and lite observer utility",
   "main": "./dist/js/obb.js",
   "private": false,
@@ -10,6 +10,8 @@
     "observer",
     "proxy",
     "reactive",
+    "sandbox",
+    "atom",
     "es6"
   ],
   "repository": {

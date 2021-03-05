@@ -6,10 +6,12 @@ export {
     Subscriber,
     observable,
     autorun,
-    atomic,
-    runAtomic,
+    atom,
+    runInAtom,
     action,
-    runAction,
+    runInAction,
+    sandbox,
+    runInSandbox,
     computed,
     watch,
     reaction,
@@ -42,25 +44,32 @@ interface IReactionState {
     [REACTION_STATE.RECORDS]: Array<IRecord>
 }
 
+const enum ACTION_TYPE {
+    NORMAL = 0,
+    ATOM = 1,
+    SANDBOX = 2,
+    ATOM_OR_SANDBOX = ACTION_TYPE.ATOM | ACTION_TYPE.SANDBOX
+}
 const enum ACTION {
     DEPTH = 0,
-    IS_ATOM = 1,
+    TYPE = 1,
 }
 interface IAction {
     [ACTION.DEPTH]: number,
-    [ACTION.IS_ATOM]: boolean,
+    [ACTION.TYPE]: ACTION_TYPE,
 }
 
 const enum RECORD_TYPE {
     OWN = 1,
-    REF = 2
+    REF = 2,
+    READONLY = 4,
+    VOLATILE = 8,
+    REF_AND_READONLY = RECORD_TYPE.REF | RECORD_TYPE.READONLY,
+    REF_AND_VOLATILE = RECORD_TYPE.REF | RECORD_TYPE.VOLATILE
 }
 
 
 type ISubscriberSet = Set<Subscriber>;
-
-type IRelations = WeakMap<Subscriber, IRelations>;
-
 
 // ------------------------------------------------------
 const SUBSCRIBER_STACK: Array<Subscriber | null> = [];
@@ -72,6 +81,7 @@ const ACTION_STACK: Array<IAction | null> = []
 
 const OBSERVER_MAP: WeakMap<any, Observer> = new WeakMap();
 
+const RECORDS_STACK: Array<IRecord[]> = [];
 
 const MASK_ITERATE = ["iterate"];
 const MASK_UNDEFINED = ["undefined"];
@@ -111,7 +121,7 @@ class Observer<T extends object = any> {
         OBSERVER_MAP.set(target, this);
 
     }
-    collect(prop: any, type?: RECORD_TYPE) {
+    collect(prop: any, type: RECORD_TYPE = RECORD_TYPE.REF) {
         let subscriber = SUBSCRIBER_STACK[0];
         if (subscriber) {
             let map = this._map(type);
@@ -130,6 +140,9 @@ class Observer<T extends object = any> {
     }
     notify(prop: any, value: any, type: RECORD_TYPE = RECORD_TYPE.REF) {
 
+        let record: IRecord = [this, prop, value, type];
+        RECORDS_STACK.length && RECORDS_STACK[0].push(record);
+
         if (ACTION_STACK[0] === null) {
             return;
         }
@@ -137,7 +150,7 @@ class Observer<T extends object = any> {
         if (set && set.size) {
             deepReactive(
                 Array.from(set),
-                ACTION_STACK.length && [this, prop, value, type]
+                ACTION_STACK.length && record
             );
         }
     }
@@ -149,8 +162,14 @@ class Observer<T extends object = any> {
     _val = (key: any) => {
         return this.target[key];
     }
-    _map(type?: RECORD_TYPE) {
-        return type !== RECORD_TYPE.OWN ? this.refmap : this.ownmap;
+    _del = (key: any) => {
+        return delete this.target[key];
+    }
+    _set = (key: any, value: any) => {
+        return this.target[key] = value;
+    }
+    _map(type: RECORD_TYPE) {
+        return type & RECORD_TYPE.REF ? this.refmap : this.ownmap;
     }
 
     _proxy_handler = {
@@ -166,7 +185,7 @@ class Observer<T extends object = any> {
         },
         set: (target: IOBTarget, prop: string, value: any) => {
 
-            //console.log("set", prop, target, prop);
+            //console.log("set", target, prop, value);
             let bak_value = target[prop];
             let ob = OBSERVER_MAP.get(value);
             let raw_value = ob ? ob.target : value;
@@ -174,11 +193,11 @@ class Observer<T extends object = any> {
             let eq = equal(bak_value, raw_value);
 
             eq && own || (target[prop] = raw_value);
-            eq || this.notify(prop, bak_value);
             if (!own) {
                 this.notify(prop, false, RECORD_TYPE.OWN);
                 this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
             }
+            eq || this.notify(prop, bak_value);
             return true;
         },
         ownKeys: (target: IOBTarget) => {
@@ -190,8 +209,8 @@ class Observer<T extends object = any> {
             return key in target;
         },
         deleteProperty: (target: IOBTarget, key: string) => {
-
-            return runAtomic(() => {
+            //console.log("deleteProperty",target,key);
+            return runInAtom(() => {
                 if (target.hasOwnProperty(key)) {
                     this.notify(key, target[key]);
                     this.notify(key, true, RECORD_TYPE.OWN);
@@ -298,33 +317,68 @@ function transacts(fn: Function, is_atom?: boolean) {
         transacted();
     }
 }
-/*
-const [without, hollow] = [SUBSCRIBER_STACK, ACTION_STACK].map(
-    stack => function (fn: Function) {
-        stack.unshift(null);
-        try {
-            return fn();
-        } catch (e) {
-            throw e;
-        } finally {
-            stack.shift();
-        }
-    }
-)
-*/
 
-function atomic(fn: Function) {
+function atom(fn: Function) {
     return transacts.bind(null, fn, true);
 }
-function runAtomic(fn: Function) {
+function runInAtom(fn: Function) {
     return transacts(fn, true);
 }
 function action(fn: Function) {
     return transacts.bind(null, fn);
 }
-function runAction(fn: Function) {
+function runInAction(fn: Function) {
     return transacts(fn);
 }
+
+function sandbox(fn: Function) {
+    return runInSandbox.bind(null, fn);
+}
+function runInSandbox(fn: Function) {
+    /*ACTION_STACK.unshift(null);*/
+    SUBSCRIBER_STACK.unshift(null);
+    RECORDS_STACK.unshift([]);
+    try {
+        return fn();
+    } catch (e) {
+        throw e;
+    } finally {
+        let records = RECORDS_STACK.shift();
+        let volatile_records: Array<IRecord> = [];
+
+        diffRecords(
+            records,
+            function (record: IRecord) {
+                let ob = record[RECORD.OBSERVER];
+                let key = record[RECORD.KEY];
+                let type = record[RECORD.TYPE];
+                if (type & RECORD_TYPE.OWN) {
+                    // 当前方法非返回 -1 则不会出现 type === RECORD_TYPE.OWN 
+                    // 而 value 不为 false 的情况
+                    ob._del(key);
+                } else if (~type & RECORD_TYPE.READONLY) {
+                    if (type & RECORD_TYPE.VOLATILE) {
+                        volatile_records.push(record);
+                        return;
+                    }
+                    ob._set(key, record[RECORD.VALUE]);
+                }
+            }
+        );
+        for (let record of volatile_records) {
+            record[RECORD.OBSERVER]._set(
+                record[RECORD.KEY],
+                record[RECORD.VALUE]
+            );
+        }
+
+        SUBSCRIBER_STACK.shift();
+        /*ACTION_STACK.shift();*/
+
+    }
+}
+
+
 
 function autorun(fn: Function) {
     let sub = new Subscriber(fn);
@@ -380,14 +434,52 @@ function reaction(handle: Function, watcher: (val: any) => void) {
 
 
 function transacting(
-    is_atom?: boolean
+    is_atom?: boolean | number
 ) {
     let action = ACTION_STACK[0];
-    is_atom = is_atom === undefined && action ? action[ACTION.IS_ATOM] : !!is_atom;
 
-    ACTION_STACK.unshift([is_atom && action ? action[ACTION.DEPTH] : ACTION_STACK.length, is_atom]);
+    let type = is_atom === undefined && action
+        ? action[ACTION.TYPE] & ACTION_TYPE.ATOM
+        : (is_atom ? ACTION_TYPE.ATOM : ACTION_TYPE.NORMAL);
+
+    ACTION_STACK.unshift([is_atom && action ? action[ACTION.DEPTH] : ACTION_STACK.length, type]);
 }
 
+function diffRecords(records: Array<IRecord>, callback?: Function) {
+    let obj_map: Map<any, Set<string>> = new Map();
+    let res = false;
+    for (let record of records) {
+        let ob = record[RECORD.OBSERVER];
+        let key = record[RECORD.KEY];
+        let key_set = obj_map.get(ob);
+        if (key_set) {
+            if (key_set.has(key)) {
+                continue;
+            } else {
+                key_set.add(key);
+            }
+        } else {
+            obj_map.set(ob, new Set([key]))
+        }
+        if (
+            equal(
+                record[RECORD.TYPE] !== RECORD_TYPE.OWN
+                    ? ob._val(key)
+                    : ob._has(key)
+                , record[RECORD.VALUE]
+            )
+        ) {
+            continue;
+        }
+        if (!callback) {
+            return true;
+        } else if (callback(record) === -1) {
+            key_set.delete(key);
+        }
+        res = true;
+    }
+    return res;
+}
 
 function transacted() {
 
@@ -396,57 +488,30 @@ function transacted() {
     let action = ACTION_STACK.shift();
     let depth = action[ACTION.DEPTH];
 
-    if (action[ACTION.IS_ATOM] && ACTION_STACK.length !== 0) {
+    if (action[ACTION.TYPE] & ACTION_TYPE.ATOM && ACTION_STACK.length !== 0) {
         return;
     }
 
-    while (REACTION_TARGET_LIST.length) {
-        let state = REACTION_STATE_LIST[0];
+    while (
+        REACTION_TARGET_LIST.length
+        && REACTION_STATE_LIST[0][REACTION_STATE.DEPTH] >= depth
+    ) {
 
-        if (state[REACTION_STATE.DEPTH] < depth) {
-            break;
-        }
-        let subscriber = REACTION_TARGET_LIST[0];
-        if (reactions.indexOf(subscriber) < 0) {
-            let obj_map: Map<any, Set<string>> = new Map();
+        let subscriber = REACTION_TARGET_LIST.shift();
+        let state = REACTION_STATE_LIST.shift();
 
-            for (let record of state[REACTION_STATE.RECORDS]) {
-                let ob = record[RECORD.OBSERVER];
-                let key = record[RECORD.KEY];
-                let key_set = obj_map.get(ob);
-                if (key_set) {
-                    if (key_set.has(key)) {
-                        continue;
-                    } else {
-                        key_set.add(key);
-                    }
-                } else {
-                    obj_map.set(ob, new Set([key]))
-                }
-                if (
-                    equal(
-                        record[RECORD.TYPE] !== RECORD_TYPE.OWN
-                            ? ob._val(key)
-                            : ob._has(key)
-                        , record[RECORD.VALUE]
-                    )
-                ) {
-                    continue;
-                }
-                reactions.unshift(subscriber);
-
-                let index: number;
-                while (
-                    (index = REACTION_TARGET_LIST.lastIndexOf(subscriber)) > 0
-                ) {
-                    REACTION_TARGET_LIST.splice(index, 1);
-                    REACTION_STATE_LIST.splice(index, 1);
-                }
-                break;
+        if (reactions.indexOf(subscriber) < 0
+            && diffRecords(state[REACTION_STATE.RECORDS])
+        ) {
+            let index: number;
+            while (
+                (index = REACTION_TARGET_LIST.lastIndexOf(subscriber)) >= 0
+            ) {
+                REACTION_TARGET_LIST.splice(index, 1);
+                REACTION_STATE_LIST.splice(index, 1);
             }
+            reactions.unshift(subscriber);
         }
-        REACTION_TARGET_LIST.shift();
-        REACTION_STATE_LIST.shift();
     }
     deepReactive(reactions);
 }
@@ -495,7 +560,7 @@ function obArray(ob: Observer<ArrayLike<any>>) {
                     const original = prototype[key];
                     return original && [key, function () {
                         let args = arguments;
-                        return runAtomic(() => original.apply(this, args));
+                        return runInAtom(() => original.apply(this, args));
                     }]
                 }
             ),
@@ -519,10 +584,10 @@ function obArray(ob: Observer<ArrayLike<any>>) {
 
     ob._proxy_handler.set = function (_target: IOBTarget, key: any, value: any) {
         let length = target.length;
-        return runAtomic(function () {
+        return runInAtom(function () {
             let res = original(_target, key, value);
             target.length !== length
-                && ob.notify("length", length);
+                && ob.notify("length", length, RECORD_TYPE.REF_AND_VOLATILE);
 
             return res;
         })
@@ -557,7 +622,15 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         } : function (value: any) {
             return prototype.has.call(target, value) ? value : MASK_UNDEFINED;
         };
-
+    internal_ob._del = function (key: any) {
+        return prototype.delete.call(target, key);
+    }
+    internal_ob._set = prototype.set
+        ? function (key: any, value: any) {
+            return prototype.set.call(target, key, value);
+        } : function (key: any, value: any) {
+            return prototype.add.call(target, key);
+        }
 
     let proxyMethods = {
         get(key: any) {
@@ -569,18 +642,18 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             let has_key = prototype.has.call(target, key);
             let bak_value = has_key ? prototype.get.call(target, key) : undefined;
             prototype.set.call(target, key, value);
-            internal_ob.notify(key, bak_value);
             has_key || internal_ob.notify(key, false, RECORD_TYPE.OWN)
+            internal_ob.notify(key, bak_value);
             return this;
         },
         add(key: any) {
             if (!prototype.has.call(target, key)) {
-                runAtomic(() => {
+                runInAtom(() => {
                     let size = _size();
                     prototype.add.call(target, key);
-                    size !== undefined && ob.notify("size", size);
-                    internal_ob.notify(key, MASK_UNDEFINED);
+                    size !== undefined && ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
                     internal_ob.notify(key, false, RECORD_TYPE.OWN)
+                    internal_ob.notify(key, MASK_UNDEFINED);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
                 });
             }
@@ -589,14 +662,14 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         delete(key: any) {
             let get = prototype.get;
             let value = get ? get.call(target, key) : key;
+            let size = _size();
             let res = prototype.delete.call(target, key);
             if (res) {
-                runAtomic(() => {
-                    let size = _size();
-                    size !== undefined && ob.notify("size", size);
+                runInAtom(() => {
                     internal_ob.notify(key, value);
                     internal_ob.notify(key, true, RECORD_TYPE.OWN);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+                    size !== undefined && ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
                 });
             }
             return res;
@@ -606,7 +679,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             if (!size) {
                 return;
             }
-            runAtomic(() => {
+            runInAtom(() => {
                 prototype.forEach.call(
                     target,
                     (value: any, key: any) => {
@@ -614,8 +687,8 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                         internal_ob.notify(key, true, RECORD_TYPE.OWN);
                     }
                 )
-                ob.notify("size", size);
                 internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+                ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
 
                 prototype.clear.call(target);
             })
@@ -677,5 +750,7 @@ function obIterator(iterator: any) {
     }
     return iterator;
 }
+
+
 
 
