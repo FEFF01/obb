@@ -68,6 +68,15 @@ const enum RECORD_TYPE {
     REF_AND_VOLATILE = RECORD_TYPE.REF | RECORD_TYPE.VOLATILE
 }
 
+const enum SANDBOX {
+    RECORDS = 0,
+    SUBSCRIBERS = 1
+}
+interface ISandbox {
+    [SANDBOX.RECORDS]: Array<IRecord>,
+    [SANDBOX.SUBSCRIBERS]: Array<Subscriber>,
+}
+
 
 type ISubscriberSet = Set<Subscriber>;
 
@@ -81,7 +90,7 @@ const ACTION_STACK: Array<IAction | null> = []
 
 const OBSERVER_MAP: WeakMap<any, Observer> = new WeakMap();
 
-const RECORDS_STACK: Array<IRecord[]> = [];
+const SANDBOX_STACK: Array<ISandbox> = [];
 
 const MASK_ITERATE = ["iterate"];
 const MASK_UNDEFINED = ["undefined"];
@@ -141,7 +150,7 @@ class Observer<T extends object = any> {
     notify(prop: any, value: any, type: RECORD_TYPE = RECORD_TYPE.REF) {
 
         let record: IRecord = [this, prop, value, type];
-        RECORDS_STACK.length && RECORDS_STACK[0].push(record);
+        SANDBOX_STACK.length && SANDBOX_STACK[0][SANDBOX.RECORDS].push(record);
 
         if (ACTION_STACK[0] === null) {
             return;
@@ -240,26 +249,39 @@ class Subscriber {
         this._deps.add(set);
         set.add(this);
     }
-    release() {
+    clear(shallow?: boolean) {
         this._deps.forEach(ref => ref.delete(this));
         this._deps.clear();
-
-        for (let child of this.children) {
-            child.release();
-            child.parent = undefined;
+        if (!shallow) {
+            for (let child of this.children) {
+                child.clear();
+                child.parent = undefined;
+            }
         }
         this.children.length = 0;
     }
-    unmount() {
-        this.release();
-        let siblings = this.parent?.children;
-        siblings && siblings.splice(siblings.indexOf(this), 1);
+    unmount(shallow?: boolean) {
+        this.clear(shallow);
+        if (!shallow) {
+            let siblings = this.parent?.children;
+            siblings && siblings.splice(siblings.indexOf(this), 1);
+            if (this._sandbox) {
+                let index = this._sandbox[SANDBOX.SUBSCRIBERS].indexOf(this);
+                index >= 0 && this._sandbox[SANDBOX.SUBSCRIBERS].splice(index, 1);
+            }
+        }
+        this._sandbox = undefined;
         this.parent = undefined;
     }
+    private _sandbox: ISandbox;
     mount() {
         if (this.parent !== undefined) {
             // 可能存者一个 Subscriber 实例发生递归 mount 或其他复用执行的情况
             return new Subscriber(this.fn).mount();
+        }
+        if (SANDBOX_STACK.length) {
+            this._sandbox = SANDBOX_STACK[0];
+            this._sandbox[SANDBOX.SUBSCRIBERS].push(this);
         }
         this.parent = SUBSCRIBER_STACK[0] || null;
         this.parent && this.parent.children.push(this);
@@ -267,7 +289,7 @@ class Subscriber {
         return this;
     }
     update() {
-        this.release();
+        this.clear();
         return this._run();
     }
     addRecord(record: IRecord) {
@@ -337,17 +359,16 @@ function sandbox(fn: Function) {
 function runInSandbox(fn: Function) {
     /*ACTION_STACK.unshift(null);*/
     SUBSCRIBER_STACK.unshift(null);
-    RECORDS_STACK.unshift([]);
+    SANDBOX_STACK.unshift([[], []]);
     try {
         return fn();
     } catch (e) {
         throw e;
     } finally {
-        let records = RECORDS_STACK.shift();
+        let handle = SANDBOX_STACK.shift();
         let volatile_records: Array<IRecord> = [];
-
         diffRecords(
-            records,
+            handle[SANDBOX.RECORDS],
             function (record: IRecord) {
                 let ob = record[RECORD.OBSERVER];
                 let key = record[RECORD.KEY];
@@ -371,7 +392,9 @@ function runInSandbox(fn: Function) {
                 record[RECORD.VALUE]
             );
         }
-
+        for (let sub of handle[SANDBOX.SUBSCRIBERS]) {
+            sub.unmount(true);
+        }
         SUBSCRIBER_STACK.shift();
         /*ACTION_STACK.shift();*/
 

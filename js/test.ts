@@ -63,8 +63,19 @@ runInSandbox(function () {
     test();
 })
 //test();
+
+
 console.log(array, json, set, map, weakset, weakmap, f32arr);
 
+
+    log("-------------", `map.set("a", [3]);`)
+    map.set("a", [3]);
+    log("-------------", `map.set("b", [4]);`)
+    map.set("b", [4]);
+    log("-------------")
+
+    log("-------------", `map.get("a")[0] = 3`)
+    map.get("a")[0] = 4;
 function test() {
     console.log(map)
     autorun(() => {
@@ -87,7 +98,7 @@ function test() {
     log("-------------", `map.set("b", [4]);`)
     map.set("b", [4]);
     log("-------------")
-
+    
 
     autorun(() => {
         log("array[Symbol.iterator]().next().value", array[Symbol.iterator]().next());

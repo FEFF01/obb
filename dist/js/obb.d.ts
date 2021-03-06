@@ -52,8 +52,9 @@ declare class Subscriber {
     private _deps;
     undepend(set: ISubscriberSet): void;
     depend(set: ISubscriberSet): void;
-    release(): void;
-    unmount(): void;
+    clear(shallow?: boolean): void;
+    unmount(shallow?: boolean): void;
+    private _sandbox;
     mount(): any;
     update(): any;
     addRecord(record: IRecord): void;
