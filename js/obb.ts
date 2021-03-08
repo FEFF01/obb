@@ -12,6 +12,7 @@ export {
     runInAction,
     sandbox,
     runInSandbox,
+    SANDOBX_OPTION,
     computed,
     watch,
     reaction,
@@ -48,7 +49,7 @@ const enum ACTION_TYPE {
     NORMAL = 0,
     ATOM = 1,
     SANDBOX = 2,
-    ATOM_OR_SANDBOX = ACTION_TYPE.ATOM | ACTION_TYPE.SANDBOX
+    ATOM_AND_SANDBOX = ATOM | SANDBOX
 }
 const enum ACTION {
     DEPTH = 0,
@@ -64,29 +65,40 @@ const enum RECORD_TYPE {
     REF = 2,
     READONLY = 4,
     VOLATILE = 8,
-    REF_AND_READONLY = RECORD_TYPE.REF | RECORD_TYPE.READONLY,
-    REF_AND_VOLATILE = RECORD_TYPE.REF | RECORD_TYPE.VOLATILE
+    REF_AND_READONLY = REF | READONLY,
+    REF_AND_VOLATILE = REF | VOLATILE
 }
 
+
+
+const enum SANDOBX_OPTION {
+    PREVENT_COLLECT = 0b01,
+    CLEAN_SUBSCRIBE = 0b010,
+    CLEAN_CHANGE = 0b0100,
+    DEFAULT = PREVENT_COLLECT | CLEAN_SUBSCRIBE | CLEAN_CHANGE,
+    NORMAL = 0b0,
+}
 const enum SANDBOX {
     RECORDS = 0,
-    SUBSCRIBERS = 1
+    SUBSCRIBERS = 1,
+    OPTION = 2
 }
 interface ISandbox {
     [SANDBOX.RECORDS]: Array<IRecord>,
-    [SANDBOX.SUBSCRIBERS]: Array<Subscriber>,
+    [SANDBOX.SUBSCRIBERS]: Array<Subscriber>
+    [SANDBOX.OPTION]: SANDOBX_OPTION
 }
 
 
 type ISubscriberSet = Set<Subscriber>;
 
 // ------------------------------------------------------
-const SUBSCRIBER_STACK: Array<Subscriber | null> = [];
+const SUBSCRIBER_STACK: Array<Subscriber> = [];
 
 const REACTION_STATE_LIST: Array<IReactionState> = [];
 const REACTION_TARGET_LIST: Array<Subscriber> = [];
 
-const ACTION_STACK: Array<IAction | null> = []
+const ACTION_STACK: Array<IAction> = []
 
 const OBSERVER_MAP: WeakMap<any, Observer> = new WeakMap();
 
@@ -132,7 +144,7 @@ class Observer<T extends object = any> {
     }
     collect(prop: any, type: RECORD_TYPE = RECORD_TYPE.REF) {
         let subscriber = SUBSCRIBER_STACK[0];
-        if (subscriber) {
+        if (subscriber && !subscriber.disabled) {
             let map = this._map(type);
             let ref = map.get(prop);
             ref || map.set(prop, ref = new Set());
@@ -152,9 +164,6 @@ class Observer<T extends object = any> {
         let record: IRecord = [this, prop, value, type];
         SANDBOX_STACK.length && SANDBOX_STACK[0][SANDBOX.RECORDS].push(record);
 
-        if (ACTION_STACK[0] === null) {
-            return;
-        }
         let set = this._map(type).get(prop);
         if (set && set.size) {
             deepReactive(
@@ -237,7 +246,6 @@ class Observer<T extends object = any> {
 class Subscriber {
     parent: Subscriber;
     children: Array<Subscriber> = [];
-
     constructor(public fn: Function) {
     }
     private _deps: Set<ISubscriberSet> = new Set();
@@ -260,7 +268,7 @@ class Subscriber {
         }
         this.children.length = 0;
     }
-    unmount(shallow?: boolean) {
+    unmount(shallow?: boolean) {    // shallow 参数暂时用于节省不必要的消耗
         this.clear(shallow);
         if (!shallow) {
             let siblings = this.parent?.children;
@@ -274,6 +282,7 @@ class Subscriber {
         this.parent = undefined;
     }
     private _sandbox: ISandbox;
+    disabled: boolean | number;
     mount() {
         if (this.parent !== undefined) {
             // 可能存者一个 Subscriber 实例发生递归 mount 或其他复用执行的情况
@@ -356,48 +365,73 @@ function runInAction(fn: Function) {
 function sandbox(fn: Function) {
     return runInSandbox.bind(null, fn);
 }
-function runInSandbox(fn: Function) {
-    /*ACTION_STACK.unshift(null);*/
-    SUBSCRIBER_STACK.unshift(null);
-    SANDBOX_STACK.unshift([[], []]);
+function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFAULT) {
+    let parent_sandbox = SANDBOX_STACK[0];
+    let parent_subscrber = SUBSCRIBER_STACK[0];
+    let disabled = parent_subscrber && parent_subscrber.disabled;
+    let subs = option & SANDOBX_OPTION.CLEAN_CHANGE || !parent_sandbox
+        ? []
+        : parent_sandbox[SANDBOX.SUBSCRIBERS];
+    let start = subs.length;
+    let records = option & SANDOBX_OPTION.CLEAN_CHANGE || !parent_sandbox
+        ? []
+        : parent_sandbox[SANDBOX.RECORDS];
+    parent_subscrber && (
+        parent_subscrber.disabled = option & SANDOBX_OPTION.PREVENT_COLLECT
+    );
+    SANDBOX_STACK.unshift([records, subs, option]);
+
     try {
         return fn();
     } catch (e) {
         throw e;
     } finally {
-        let handle = SANDBOX_STACK.shift();
-        let volatile_records: Array<IRecord> = [];
-        diffRecords(
-            handle[SANDBOX.RECORDS],
-            function (record: IRecord) {
-                let ob = record[RECORD.OBSERVER];
-                let key = record[RECORD.KEY];
-                let type = record[RECORD.TYPE];
-                if (type & RECORD_TYPE.OWN) {
-                    // 当前方法非返回 -1 则不会出现 type === RECORD_TYPE.OWN 
-                    // 而 value 不为 false 的情况
-                    ob._del(key);
-                } else if (~type & RECORD_TYPE.READONLY) {
-                    if (type & RECORD_TYPE.VOLATILE) {
-                        volatile_records.push(record);
-                        return;
-                    }
-                    ob._set(key, record[RECORD.VALUE]);
-                }
-            }
-        );
-        for (let record of volatile_records) {
-            record[RECORD.OBSERVER]._set(
-                record[RECORD.KEY],
-                record[RECORD.VALUE]
-            );
-        }
-        for (let sub of handle[SANDBOX.SUBSCRIBERS]) {
-            sub.unmount(true);
-        }
-        SUBSCRIBER_STACK.shift();
-        /*ACTION_STACK.shift();*/
+        SANDBOX_STACK.shift();
 
+        if (option & SANDOBX_OPTION.CLEAN_CHANGE) {
+            cleanChanges(records);
+        }
+        if (option & SANDOBX_OPTION.CLEAN_SUBSCRIBE) {
+            for (let i = subs.length - 1; i >= start; i--) {
+                let sub = subs[i];
+                sub.unmount(sub.parent !== parent_subscrber);
+            }
+            subs.length = start;    //节省消耗，unmount 参数 1 不一定都是 true
+        } else if (parent_sandbox && option & SANDOBX_OPTION.CLEAN_CHANGE) {
+            Array.prototype.push.apply(
+                parent_sandbox[SANDBOX.SUBSCRIBERS],
+                subs
+            )
+        }
+        parent_subscrber && (parent_subscrber.disabled = disabled);
+    }
+}
+function cleanChanges(records: Array<IRecord>) {
+    let volatile_records: Array<IRecord> = [];
+    diffRecords(
+        records,
+        function (record: IRecord) {
+            let ob = record[RECORD.OBSERVER];
+            let key = record[RECORD.KEY];
+            let type = record[RECORD.TYPE];
+            if (type & RECORD_TYPE.OWN) {
+                // 当前方法非返回 -1 则不会出现 type === RECORD_TYPE.OWN 
+                // 而 value 不为 false 的情况
+                ob._del(key);
+            } else if (~type & RECORD_TYPE.READONLY) {
+                if (type & RECORD_TYPE.VOLATILE) {
+                    volatile_records.push(record);
+                    return;
+                }
+                ob._set(key, record[RECORD.VALUE]);
+            }
+        }
+    );
+    for (let record of volatile_records) {
+        record[RECORD.OBSERVER]._set(
+            record[RECORD.KEY],
+            record[RECORD.VALUE]
+        );
     }
 }
 
@@ -541,6 +575,11 @@ function transacted() {
 
 function deepReactive(subs: Array<Subscriber>, record?: IRecord) {
     let reactions: Array<Subscriber> = [];
+    let sandbox = SANDBOX_STACK[0];
+    let includes = sandbox
+        && sandbox[SANDBOX.OPTION] & SANDOBX_OPTION.CLEAN_CHANGE
+        && sandbox[SANDBOX.SUBSCRIBERS];
+
     next: for (let i = 0, sub: Subscriber; i < subs.length; i++) {
         sub = subs[i];
 
@@ -552,15 +591,17 @@ function deepReactive(subs: Array<Subscriber>, record?: IRecord) {
         }
         sub = subs[i];
         if (!sub.is_run) {
-            reactions.push(subs[i]);
+            includes && includes.indexOf(sub) < 0 || reactions.push(subs[i]);
         } else {
             // may be err
             debugger;
         }
     }
-    for (let sub of reactions) {
-        record ? sub.addRecord(record) : sub.update();
-    }
+    reactions.forEach(
+        record ?
+            sub => sub.addRecord(record)
+            : sub => sub.update()
+    );
 }
 
 function equal(a: any, b: any) {

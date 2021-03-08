@@ -1,4 +1,4 @@
-export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, computed, watch, reaction, };
+export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, SANDOBX_OPTION, computed, watch, reaction, };
 declare type IOBInternalObject = Set<any> | Map<any, any> | WeakSet<any> | WeakMap<any, any>;
 declare type IOBTarget = Object | IOBInternalObject;
 declare const enum RECORD {
@@ -20,6 +20,13 @@ declare const enum RECORD_TYPE {
     VOLATILE = 8,
     REF_AND_READONLY = 6,
     REF_AND_VOLATILE = 10
+}
+declare const enum SANDOBX_OPTION {
+    PREVENT_COLLECT = 1,
+    CLEAN_SUBSCRIBE = 2,
+    CLEAN_CHANGE = 4,
+    DEFAULT = 7,
+    NORMAL = 0
 }
 declare type ISubscriberSet = Set<Subscriber>;
 declare class Observer<T extends object = any> {
@@ -55,6 +62,7 @@ declare class Subscriber {
     clear(shallow?: boolean): void;
     unmount(shallow?: boolean): void;
     private _sandbox;
+    disabled: boolean | number;
     mount(): any;
     update(): any;
     addRecord(record: IRecord): void;
@@ -66,7 +74,7 @@ declare function runInAtom(fn: Function): any;
 declare function action(fn: Function): any;
 declare function runInAction(fn: Function): any;
 declare function sandbox(fn: Function): any;
-declare function runInSandbox(fn: Function): any;
+declare function runInSandbox(fn: Function, option?: SANDOBX_OPTION): any;
 declare function autorun(fn: Function): () => void;
 declare function observable(obj: IOBTarget | any): any;
 declare function computed(calc: Function): () => any;

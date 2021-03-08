@@ -10,6 +10,7 @@ import {
     runInAction,
     sandbox,
     runInSandbox,
+    SANDOBX_OPTION,
     computed,
     watch,
     reaction,
@@ -59,6 +60,22 @@ function log(expr: any, ...values: any) {
 }
 // -------------
 
+
+
+autorun(() => {
+    console.log(111, map.get("a"))
+    autorun(() => {
+        console.log(111, map.keys());
+        for (let key of Array.from(map.keys())) {//target es5
+            autorun(() => {
+                let value = map.get(key);
+                console.log(111, key, value, value instanceof Array && value[0]);
+            })
+        }
+    })
+})
+
+log("-------------")
 runInSandbox(function () {
     test();
 })
@@ -68,14 +85,57 @@ runInSandbox(function () {
 console.log(array, json, set, map, weakset, weakmap, f32arr);
 
 
-    log("-------------", `map.set("a", [3]);`)
-    map.set("a", [3]);
-    log("-------------", `map.set("b", [4]);`)
-    map.set("b", [4]);
-    log("-------------")
+log("-------------", `map.set("a", [3]);`)
+map.set("a", [3]);
+log("-------------", `map.set("b", [4]);`)
+map.set("b", [4]);
+log("-------------")
 
-    log("-------------", `map.get("a")[0] = 3`)
-    map.get("a")[0] = 4;
+log("-------------", `map.get("a")[0] = 3`)
+map.get("a")[0] = 4;
+
+
+
+autorun(function () {
+    runInSandbox(function () {
+        console.log("Sandbox", map.get("b"))
+        runInSandbox(function () {
+            console.log("NORMAL", map.get("a"))
+        }, SANDOBX_OPTION.NORMAL)
+    })
+})
+
+log("-------------", `map.set("a", [5]);`)
+map.set("a", [5]);
+log("-------------", `map.set("b", [6]);`)
+map.set("b", [6]);
+
+
+
+runInSandbox(function () {
+    autorun(function () {
+        console.log("1111", map.get("a"))
+        runInSandbox(function () {
+            console.log("222", map.get("b"));
+            runInSandbox(function () {
+                console.log("333", map.get("c"));
+            }, SANDOBX_OPTION.CLEAN_SUBSCRIBE)
+
+        })
+    })
+    map.set("a", [333])
+    runInSandbox(function () {
+        map.set("a", [444])
+    }, SANDOBX_OPTION.NORMAL)
+    runInSandbox(function () {
+        map.set("a", [555])
+    })
+    //map.set("b", ["bbbbbbbbbb"])
+    map.set("c", ["cccccccccc"])
+})
+map.set("a", [666])
+
+
 function test() {
     console.log(map)
     autorun(() => {
@@ -98,7 +158,7 @@ function test() {
     log("-------------", `map.set("b", [4]);`)
     map.set("b", [4]);
     log("-------------")
-    
+
 
     autorun(() => {
         log("array[Symbol.iterator]().next().value", array[Symbol.iterator]().next());
