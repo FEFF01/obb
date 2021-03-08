@@ -20,7 +20,7 @@ export {
 
 
 type IOBInternalObject = Set<any> | Map<any, any> | WeakSet<any> | WeakMap<any, any>
-type IOBTarget = Object | IOBInternalObject;
+type IOBTarget = object | IOBInternalObject;
 
 
 const enum RECORD {
@@ -69,15 +69,14 @@ const enum RECORD_TYPE {
     REF_AND_VOLATILE = REF | VOLATILE
 }
 
-
-
-const enum SANDOBX_OPTION {
+enum SANDOBX_OPTION {   // 非 const 使得外部非 ts 环境能正常使用
     PREVENT_COLLECT = 0b01,
     CLEAN_SUBSCRIBE = 0b010,
     CLEAN_CHANGE = 0b0100,
     DEFAULT = PREVENT_COLLECT | CLEAN_SUBSCRIBE | CLEAN_CHANGE,
     NORMAL = 0b0,
 }
+
 const enum SANDBOX {
     RECORDS = 0,
     SUBSCRIBERS = 1,
@@ -379,7 +378,17 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
     parent_subscrber && (
         parent_subscrber.disabled = option & SANDOBX_OPTION.PREVENT_COLLECT
     );
-    SANDBOX_STACK.unshift([records, subs, option]);
+    SANDBOX_STACK.unshift(
+        [
+            records,
+            subs,
+            option | (
+                // 用于外部判断逻辑，使能根据上层 sandbox 配置过滤掉不应当的订阅响应
+                parent_sandbox
+                && parent_sandbox[SANDBOX.OPTION] & SANDOBX_OPTION.CLEAN_CHANGE
+            )
+        ]
+    );
 
     try {
         return fn();
@@ -445,7 +454,7 @@ function autorun(fn: Function) {
     };
 }
 
-function observable(obj: IOBTarget | any) {
+function observable(obj: IOBTarget) {
     return obj && typeof obj === "object" ? new Observer(obj).proxy : obj;
 }
 
@@ -573,28 +582,30 @@ function transacted() {
     deepReactive(reactions);
 }
 
-function deepReactive(subs: Array<Subscriber>, record?: IRecord) {
-    let reactions: Array<Subscriber> = [];
+function deepReactive(reactions: Array<Subscriber>, record?: IRecord) {
+
     let sandbox = SANDBOX_STACK[0];
     let includes = sandbox
         && sandbox[SANDBOX.OPTION] & SANDOBX_OPTION.CLEAN_CHANGE
         && sandbox[SANDBOX.SUBSCRIBERS];
-
-    next: for (let i = 0, sub: Subscriber; i < subs.length; i++) {
-        sub = subs[i];
-
+    function inScoped(sub: Subscriber) {
+        return !includes || includes.indexOf(sub) >= 0;
+    }
+    next: for (let i = 0; i < reactions.length; i++) {
+        let sub = reactions[i];
         while ((sub = sub.parent)) {
-            if (subs.indexOf(sub) >= 0) {
-                subs.splice(i--, 1);
+            if (sub.is_run || !inScoped(sub)) {
+                break;
+            }
+            if (reactions.indexOf(sub) >= 0) {
+                reactions.splice(i--, 1);
                 continue next;
             }
         }
-        sub = subs[i];
-        if (!sub.is_run) {
-            includes && includes.indexOf(sub) < 0 || reactions.push(subs[i]);
-        } else {
-            // may be err
-            debugger;
+        sub = reactions[i];
+
+        if (sub.is_run || !inScoped(sub)) {
+            reactions.splice(i--, 1);
         }
     }
     reactions.forEach(

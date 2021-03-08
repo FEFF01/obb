@@ -36,4 +36,108 @@
 > 不做太多无用功
 >* 例如一个 `action` 内有如下逻辑 `a.push(1),a.pop(),b.c++,b.c--` 那该逻辑将不会产生任何后果（与之相关的订阅者不会得到任何变更通知）
 
-更多用法或测试案例参考 : [test.ts](./js/test.ts)
+
+
+### Examples
+
+>* [test.ts](./js/test.ts)
+
+```bash
+    yarn add obb --dev
+    npm i obb --save-dev
+```
+
+```javascript
+/**
+ * npm i obb --save-dev
+ * or
+ * yarn add obb --dev
+ */
+
+import  {
+    Observer,
+    Subscriber,
+    observable,
+    autorun,
+    atom,
+    runInAtom,
+    action,
+    runInAction,
+    sandbox,
+    runInSandbox,
+    SANDOBX_OPTION,
+    computed,
+    watch,
+    reaction,
+} from 'obb'
+
+let a = observable([1, 2, 3]);
+
+
+/**
+ * 默认配置的 sandbox 内部产生的可观测变更
+ * 都会在 sandbox 执行结束后得到还原
+ */
+runInSandbox(() => {
+
+    autorun(() => {
+        console.log("a[0]", a[0]);  // a[0] 1
+    });
+
+    a.unshift(111); // a[0] 111  
+
+    runInSandbox(() => {
+        a.unshift(222); // 
+        autorun(() => {
+            console.log("a[1]", a[1]);  // a[1] 111
+        })
+        a.unshift(333); // a[1],222
+    });
+
+    console.log(
+        "JSON.stringify(a)",
+        JSON.stringify(a)
+    );  // JSON.stringify(a) [111,1,2,3]
+
+    runInAction(() => {
+        a.unshift(1, 2, 3);
+        a.splice(0, 3);
+    });  // 
+
+    runInAction(() => {
+        a[0] += 1;
+        a[0] += 1;
+    });  // a[0] 113
+
+    autorun(() => {
+        /**
+         * 利用 SANDOBX_OPTION.PREVENT_COLLECT 
+         * 和 SANDOBX_OPTION.NORMAL 做依赖穿透
+         * 当前 autorun 中，只依赖 a[2] 
+         * 不会产生对 a[1] 的订阅   
+         */
+        runInSandbox(() => {
+            console.log("a[1]", a[1]);  // a[1] 1
+            runInSandbox(() => {
+                console.log(
+                    "a[2]", 
+                    a[2]
+                );  // a[2] 2
+            }, SANDOBX_OPTION.NORMAL)
+        }, SANDOBX_OPTION.PREVENT_COLLECT);
+    });
+
+    a[1] += 1;  //
+    console.log("-----------------");
+    a[2] += 1;  // a[1] 2 \n a[2] 3
+
+});
+
+console.log("=================")
+console.log(
+    "JSON.stringify(a)",
+    JSON.stringify(a)
+);  // JSON.stringify(a) [1,2,3]
+
+```
+

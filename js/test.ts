@@ -15,6 +15,7 @@ import {
     watch,
     reaction,
 } from './obb'
+
 /*
 import {
     Observer,
@@ -59,6 +60,102 @@ function log(expr: any, ...values: any) {
     console.log(expr, ...values);
 }
 // -------------
+
+let a = observable([1, 2, 3]);
+
+
+/**
+ * 默认配置的 sandbox 内部产生的可观测变更
+ * 都会在 sandbox 执行结束后得到还原
+ */
+runInSandbox(() => {
+
+    autorun(() => {
+        console.log("a[0]", a[0]);  // a[0] 1
+    });
+
+    a.unshift(111); // a[0] 111  
+
+    runInSandbox(() => {
+        a.unshift(222); // 
+        autorun(() => {
+            console.log("a[1]", a[1]);  // a[1] 111
+        })
+        a.unshift(333); // a[1],222
+    });
+
+    console.log(
+        "JSON.stringify(a)",
+        JSON.stringify(a)
+    );  // JSON.stringify(a) [111,1,2,3]
+
+    runInAction(() => {
+        a.unshift(1, 2, 3);
+        a.splice(0, 3);
+    });  // 
+
+    runInAction(() => {
+        a[0] += 1;
+        a[0] += 1;
+    });  // a[0] 113
+
+    autorun(() => {
+        /**
+         * 利用 SANDOBX_OPTION.PREVENT_COLLECT 
+         * 和 SANDOBX_OPTION.NORMAL 做依赖穿透
+         * 当前 autorun 中，只依赖 a[2] 
+         * 不会产生对 a[1] 的订阅   
+         */
+        runInSandbox(() => {
+            console.log("a[1]", a[1]);  // a[1] 1
+            runInSandbox(() => {
+                console.log(
+                    "a[2]",
+                    a[2]
+                );  // a[2] 2
+            }, SANDOBX_OPTION.NORMAL)
+        }, SANDOBX_OPTION.PREVENT_COLLECT);
+    });
+
+    a[1] += 1;  //
+    console.log("-----------------");
+    a[2] += 1;  // a[1] 2 \n a[2] 3
+
+});
+
+console.log("=================")
+console.log(
+    "JSON.stringify(a)",
+    JSON.stringify(a)
+);  // JSON.stringify(a) [1,2,3]
+
+//throw ""
+autorun(function () {
+    console.log("000000001111", map.get("a"))
+})
+
+runInSandbox(function () {
+    autorun(function () {
+        console.log("1111", map.get("a"))
+        runInSandbox(function () {
+            console.log("222", map.get("b"));
+            runInSandbox(function () {
+                console.log("333", map.get("c"));
+            }, SANDOBX_OPTION.CLEAN_SUBSCRIBE)
+
+        })
+    })
+    map.set("a", [333])
+    runInSandbox(function () {
+        map.set("a", [444])
+    }, SANDOBX_OPTION.NORMAL)
+    runInSandbox(function () {
+        map.set("a", [555])
+    })
+    //map.set("b", ["bbbbbbbbbb"])
+    map.set("c", ["cccccccccc"])
+})
+map.set("a", [666])
 
 
 
@@ -111,29 +208,6 @@ log("-------------", `map.set("b", [6]);`)
 map.set("b", [6]);
 
 
-
-runInSandbox(function () {
-    autorun(function () {
-        console.log("1111", map.get("a"))
-        runInSandbox(function () {
-            console.log("222", map.get("b"));
-            runInSandbox(function () {
-                console.log("333", map.get("c"));
-            }, SANDOBX_OPTION.CLEAN_SUBSCRIBE)
-
-        })
-    })
-    map.set("a", [333])
-    runInSandbox(function () {
-        map.set("a", [444])
-    }, SANDOBX_OPTION.NORMAL)
-    runInSandbox(function () {
-        map.set("a", [555])
-    })
-    //map.set("b", ["bbbbbbbbbb"])
-    map.set("c", ["cccccccccc"])
-})
-map.set("a", [666])
 
 
 function test() {
