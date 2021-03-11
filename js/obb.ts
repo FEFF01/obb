@@ -143,7 +143,7 @@ class Observer<T extends object = any> {
     }
     collect(prop: any, type: RECORD_TYPE = RECORD_TYPE.REF) {
         let subscriber = SUBSCRIBER_STACK[0];
-        if (subscriber && !subscriber.disabled) {
+        if (subscriber && subscriber.activate) {
             let map = this._map(type);
             let ref = map.get(prop);
             ref || map.set(prop, ref = new Set());
@@ -245,7 +245,7 @@ class Observer<T extends object = any> {
 class Subscriber {
     parent: Subscriber;
     children: Array<Subscriber> = [];
-    constructor(public fn: Function) {
+    constructor(public fn: Function, public activate: boolean | number = true) {
     }
     private _deps: Set<ISubscriberSet> = new Set();
     undepend(set: ISubscriberSet) {
@@ -281,7 +281,6 @@ class Subscriber {
         this.parent = undefined;
     }
     private _sandbox: ISandbox;
-    disabled: boolean | number;
     mount() {
         if (this.parent !== undefined) {
             // 可能存者一个 Subscriber 实例发生递归 mount 或其他复用执行的情况
@@ -367,7 +366,7 @@ function sandbox(fn: Function) {
 function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFAULT) {
     let parent_sandbox = SANDBOX_STACK[0];
     let parent_subscrber = SUBSCRIBER_STACK[0];
-    let disabled = parent_subscrber && parent_subscrber.disabled;
+    let activate = parent_subscrber && parent_subscrber.activate;
     let subs = option & SANDOBX_OPTION.CLEAN_CHANGE || !parent_sandbox
         ? []
         : parent_sandbox[SANDBOX.SUBSCRIBERS];
@@ -376,7 +375,7 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
         ? []
         : parent_sandbox[SANDBOX.RECORDS];
     parent_subscrber && (
-        parent_subscrber.disabled = option & SANDOBX_OPTION.PREVENT_COLLECT
+        parent_subscrber.activate = ~option & SANDOBX_OPTION.PREVENT_COLLECT
     );
     SANDBOX_STACK.unshift(
         [
@@ -395,6 +394,7 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
     } catch (e) {
         throw e;
     } finally {
+
         SANDBOX_STACK.shift();
 
         if (option & SANDOBX_OPTION.CLEAN_CHANGE) {
@@ -412,7 +412,7 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
                 subs
             )
         }
-        parent_subscrber && (parent_subscrber.disabled = disabled);
+        parent_subscrber && (parent_subscrber.activate = activate);
     }
 }
 function cleanChanges(records: Array<IRecord>) {
@@ -445,9 +445,8 @@ function cleanChanges(records: Array<IRecord>) {
 }
 
 
-
-function autorun(fn: Function) {
-    let sub = new Subscriber(fn);
+function autorun(fn: Function, activate: boolean | number = true) {
+    let sub = new Subscriber(fn, activate);
     sub.mount();
     return function disposer() {
         sub.unmount();

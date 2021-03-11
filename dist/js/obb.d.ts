@@ -53,16 +53,16 @@ declare class Observer<T extends object = any> {
 }
 declare class Subscriber {
     fn: Function;
+    activate: boolean | number;
     parent: Subscriber;
     children: Array<Subscriber>;
-    constructor(fn: Function);
+    constructor(fn: Function, activate?: boolean | number);
     private _deps;
     undepend(set: ISubscriberSet): void;
     depend(set: ISubscriberSet): void;
     clear(shallow?: boolean): void;
     unmount(shallow?: boolean): void;
     private _sandbox;
-    disabled: boolean | number;
     mount(): any;
     update(): any;
     addRecord(record: IRecord): void;
@@ -75,7 +75,7 @@ declare function action(fn: Function): any;
 declare function runInAction(fn: Function): any;
 declare function sandbox(fn: Function): any;
 declare function runInSandbox(fn: Function, option?: SANDOBX_OPTION): any;
-declare function autorun(fn: Function): () => void;
+declare function autorun(fn: Function, activate?: boolean | number): () => void;
 declare function observable(obj: IOBTarget): any;
 declare function computed(calc: Function): () => any;
 declare function watch(handle: Function, watcher: (new_value: any, old_value: any) => void): () => void;

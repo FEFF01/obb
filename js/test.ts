@@ -54,7 +54,6 @@ let weakmap = observable(new WeakMap());
 let f32arr = observable(new Float32Array(10));
 
 
-
 function log(expr: any, ...values: any) {
     values.length && values.unshift("->")
     console.log(expr, ...values);
