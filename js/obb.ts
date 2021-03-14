@@ -68,7 +68,6 @@ const enum RECORD_TYPE {
     REF_AND_READONLY = REF | READONLY,
     REF_AND_VOLATILE = REF | VOLATILE
 }
-
 enum SANDOBX_OPTION {   // 非 const 使得外部非 ts 环境能正常使用
     PREVENT_COLLECT = 0b01,
     CLEAN_SUBSCRIBE = 0b010,
@@ -143,7 +142,7 @@ class Observer<T extends object = any> {
     }
     collect(prop: any, type: RECORD_TYPE = RECORD_TYPE.REF) {
         let subscriber = SUBSCRIBER_STACK[0];
-        if (subscriber && subscriber.activate) {
+        if (subscriber && !subscriber.passive) {
             let map = this._map(type);
             let ref = map.get(prop);
             ref || map.set(prop, ref = new Set());
@@ -245,7 +244,7 @@ class Observer<T extends object = any> {
 class Subscriber {
     parent: Subscriber;
     children: Array<Subscriber> = [];
-    constructor(public fn: Function, public activate: boolean | number = true) {
+    constructor(public fn: Function, public passive?: boolean | number) {
     }
     private _deps: Set<ISubscriberSet> = new Set();
     undepend(set: ISubscriberSet) {
@@ -312,11 +311,12 @@ class Subscriber {
         }
     }
     is_run = false;
+    res: any;
     private _run() {
         this.is_run = true;
         SUBSCRIBER_STACK.unshift(this);
         try {
-            return this.fn();
+            return this.res = this.fn();
         } catch (e) {
             throw e;
         } finally {
@@ -366,7 +366,7 @@ function sandbox(fn: Function) {
 function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFAULT) {
     let parent_sandbox = SANDBOX_STACK[0];
     let parent_subscrber = SUBSCRIBER_STACK[0];
-    let activate = parent_subscrber && parent_subscrber.activate;
+    let passive = parent_subscrber && parent_subscrber.passive;
     let subs = option & SANDOBX_OPTION.CLEAN_CHANGE || !parent_sandbox
         ? []
         : parent_sandbox[SANDBOX.SUBSCRIBERS];
@@ -375,7 +375,7 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
         ? []
         : parent_sandbox[SANDBOX.RECORDS];
     parent_subscrber && (
-        parent_subscrber.activate = ~option & SANDOBX_OPTION.PREVENT_COLLECT
+        parent_subscrber.passive = option & SANDOBX_OPTION.PREVENT_COLLECT
     );
     SANDBOX_STACK.unshift(
         [
@@ -412,7 +412,7 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
                 subs
             )
         }
-        parent_subscrber && (parent_subscrber.activate = activate);
+        parent_subscrber && (parent_subscrber.passive = passive);
     }
 }
 function cleanChanges(records: Array<IRecord>) {
@@ -445,8 +445,8 @@ function cleanChanges(records: Array<IRecord>) {
 }
 
 
-function autorun(fn: Function, activate: boolean | number = true) {
-    let sub = new Subscriber(fn, activate);
+function autorun(fn: Function, passive: boolean | number = false) {
+    let sub = new Subscriber(fn, passive);
     sub.mount();
     return function disposer() {
         sub.unmount();
