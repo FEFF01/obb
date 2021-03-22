@@ -48,11 +48,6 @@
 ```
 
 ```javascript
-/**
- * npm i obb --save-dev
- * or
- * yarn add obb --dev
- */
 
 import  {
     Observer,

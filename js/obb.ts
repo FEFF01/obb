@@ -20,7 +20,7 @@ export {
 
 
 type IOBInternalObject = Set<any> | Map<any, any> | WeakSet<any> | WeakMap<any, any>
-type IOBTarget = object | IOBInternalObject;
+type IOBTarget = object | IOBInternalObject | Iterable<any> | ArrayLike<any>;
 
 
 const enum RECORD {
@@ -111,10 +111,6 @@ class Observer<T extends object = any> {
     readonly refmap: Map<any, ISubscriberSet> = new Map();
     readonly ownmap: Map<any, ISubscriberSet> = new Map();
     constructor(readonly target: T) {
-        let ob = OBSERVER_MAP.get(target);
-        if (ob) {
-            return ob;
-        }
 
         switch (true) {
             case target instanceof WeakSet:
@@ -189,7 +185,7 @@ class Observer<T extends object = any> {
     }
 
     _proxy_handler = {
-        get: (target: IOBTarget, prop: string) => {
+        get: (target: IOBTarget, prop: string | symbol) => {
 
             //console.log("get", target, prop);
             let value = target[prop];
@@ -453,8 +449,18 @@ function autorun(fn: Function, passive: boolean | number = false) {
     };
 }
 
-function observable(obj: IOBTarget) {
-    return obj && typeof obj === "object" ? new Observer(obj).proxy : obj;
+const BUILTIN_LITERAL_SET = new Set([Date, RegExp]);
+function observable(obj: any) {
+
+    if (obj && typeof obj === "object") {
+        let ob = OBSERVER_MAP.get(obj);
+        if (ob) {
+            obj = ob.proxy;
+        } else if (!BUILTIN_LITERAL_SET.has(obj.constructor)) {
+            obj = new Observer(obj).proxy;
+        }
+    }
+    return obj;
 }
 
 function computed(calc: Function) {
@@ -644,7 +650,17 @@ function obArray(ob: Observer<ArrayLike<any>>) {
                     const original = prototype[key];
                     return original && [key, function () {
                         ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
-                        return obIterator(original.call(target));
+                        let index = 0;
+                        let proxy = ob.proxy;
+                        return {
+                            next() {
+                                let done = index >= target.length;
+                                let value: any;
+                                done || (value = proxy[index++]);
+                                return { done, value }
+                            }
+                        }
+                        //return obIterator(target, original);
                     }]
                 }
             )
@@ -690,12 +706,17 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
 
     internal_ob._has = prototype.has.bind(target);
 
-    internal_ob._val = target instanceof Map || target instanceof WeakMap
-        ? function (key: any) {
+    if (target instanceof Map || target instanceof WeakMap) {
+
+        internal_ob._val = function (key: any) {
             return prototype.get.call(target, key);;
-        } : function (value: any) {
+        };
+    } else {
+        internal_ob._val = function (value: any) {
             return prototype.has.call(target, value) ? value : MASK_UNDEFINED;
         };
+    }
+
     internal_ob._del = function (key: any) {
         return prototype.delete.call(target, key);
     }
@@ -708,10 +729,15 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
 
     let proxyMethods = {
         get(key: any) {
+            /*let kob = OBSERVER_MAP.get(key);
+            kob && (key = kob.target);*/
+
             internal_ob.collect(key);
             return observable(prototype.get.call(target, key));
         },
         set(key: any, value: any) {
+            let kob = OBSERVER_MAP.get(key);
+            kob && (key = kob.target);
 
             let has_key = prototype.has.call(target, key);
             let bak_value = has_key ? prototype.get.call(target, key) : undefined;
@@ -721,6 +747,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             return this;
         },
         add(key: any) {
+
             if (!prototype.has.call(target, key)) {
                 runInAtom(() => {
                     let size = _size();
@@ -734,6 +761,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             return this;
         },
         delete(key: any) {
+
             let get = prototype.get;
             let value = get ? get.call(target, key) : key;
             let size = _size();
@@ -775,18 +803,38 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
 
         },
         has(value: any) {
+
             internal_ob.collect(value, RECORD_TYPE.OWN);
             let res = prototype.has.call(target, value);
             return res;
         },
         size: _size,
-        ...["keys", "entries", "values", Symbol.iterator].reduce(
-            function (res, key) {
-                let original = prototype[key];
+        ...[
+            ["keys", (value: [any, any]) => value[0]],
+            ["entries", (value: [any, any]) => [value[0], observable(value[1])]],
+            ["values", (value: [any, any]) => observable(value[1])],
+            [Symbol.iterator, (value: [any, any]) => observable(value[1])]
+        ].reduce(
+            function (res, [key, _value]: [string | symbol, any]) {
+                let original = prototype["entries"/*key*/];
                 if (original) {
                     res[key] = function () {
                         internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
-                        return obIterator(original.apply(target, arguments));
+
+                        let iterator = original.call(target);
+                        let originalNext = iterator.next.bind(iterator);
+                        iterator.next = function () {
+                            let { done, value } = originalNext();
+
+                            if (!done) {
+                                internal_ob.collect(value[0]);
+                                internal_ob.collect(value[0], RECORD_TYPE.OWN);
+                                value = _value(value);
+                            }
+                            return { done, value };
+                        }
+                        return iterator;
+                        //return obIterator(target, original);
                     }
                 }
                 return res;
@@ -812,11 +860,14 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
 
     target.__proto__ = Object.create(target.__proto__.__proto__, descriptors);
 }
-
-function obIterator(iterator: any) {
+/*
+function obIterator3(target: any, original: any) {
+    let iterator = original.call(target);
     let originalNext = iterator.next.bind(iterator);
     iterator.next = function () {
-        let { done, value } = originalNext();
+
+        let next = originalNext();
+        let { done, value } = next;
         if (!done) {
             value = observable(value);
         }
@@ -824,7 +875,7 @@ function obIterator(iterator: any) {
     }
     return iterator;
 }
-
+*/
 
 
 

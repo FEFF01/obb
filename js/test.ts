@@ -60,6 +60,9 @@ function log(expr: any, ...values: any) {
 }
 // -------------
 
+console.log("" + observable(new Date()))
+
+
 let a = observable([1, 2, 3]);
 
 
