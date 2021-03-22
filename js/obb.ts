@@ -19,8 +19,8 @@ export {
 };
 
 
-type IOBInternalObject = Set<any> | Map<any, any> | WeakSet<any> | WeakMap<any, any>
-type IOBTarget = object | IOBInternalObject | Iterable<any> | ArrayLike<any>;
+type IOBInternalObject = Iterable<any> | ArrayLike<any>;
+type IOBTarget = object | IOBInternalObject;
 
 
 const enum RECORD {
@@ -87,10 +87,12 @@ interface ISandbox {
     [SANDBOX.OPTION]: SANDOBX_OPTION
 }
 
-
 type ISubscriberSet = Set<Subscriber>;
 
 // ------------------------------------------------------
+
+const GLOBAL = typeof window === "object" ? window : global;
+
 const SUBSCRIBER_STACK: Array<Subscriber> = [];
 
 const REACTION_STATE_LIST: Array<IReactionState> = [];
@@ -449,15 +451,33 @@ function autorun(fn: Function, passive: boolean | number = false) {
     };
 }
 
-const BUILTIN_LITERAL_SET = new Set([Date, RegExp]);
-function observable(obj: any) {
+/*
+const BUILTIN_LITERAL_SET = new Set(
+    [Date, RegExp, Number, String, Blob]
+);//[Date, RegExp, Number, String], GLOBAL.BigInt
+*/
 
+const SHOULD_OBSERVABLE_SET: Set<Function> = new Set([
+    Object, Array, Map, Set, WeakMap, WeakSet,
+    Float32Array, Float64Array,
+    Int8Array, Int16Array, Int32Array,
+    Uint8Array, Uint16Array, Uint32Array,
+    Uint8ClampedArray,
+]);
+
+function observable<T = IOBTarget>(obj: T): T {
     if (obj && typeof obj === "object") {
         let ob = OBSERVER_MAP.get(obj);
         if (ob) {
             obj = ob.proxy;
-        } else if (!BUILTIN_LITERAL_SET.has(obj.constructor)) {
-            obj = new Observer(obj).proxy;
+        } else {
+            let constructor = obj.constructor;
+            if (
+                SHOULD_OBSERVABLE_SET.has(constructor)
+                || GLOBAL[constructor.name] !== constructor
+            ) {
+                obj = new Observer(obj as any).proxy;
+            }
         }
     }
     return obj;

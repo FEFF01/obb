@@ -34,7 +34,7 @@ import {
 } from '../dist/js/obb.js'
 */
 
-let array = observable([{ a: 1 }, 2, 3]);
+let array = observable<Array<any>>([{ a: 1 }, 2, 3]);
 let json = observable({ a: [1], b: 2, c: 3, [Symbol("test")]: 4 });
 let set = observable(new Set([1, 2, 3]));
 let map = observable(
@@ -48,7 +48,7 @@ let map = observable(
 );
 
 
-let weakset = observable(new WeakSet());
+let weakset = observable<any>(new WeakSet());
 let weakmap = observable(new WeakMap());
 
 let f32arr = observable(new Float32Array(10));
@@ -61,7 +61,6 @@ function log(expr: any, ...values: any) {
 // -------------
 
 console.log("" + observable(new Date()))
-
 
 let a = observable([1, 2, 3]);
 

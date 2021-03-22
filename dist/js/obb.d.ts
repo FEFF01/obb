@@ -1,6 +1,6 @@
 export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, SANDOBX_OPTION, computed, watch, reaction, };
-declare type IOBInternalObject = Set<any> | Map<any, any> | WeakSet<any> | WeakMap<any, any>;
-declare type IOBTarget = object | IOBInternalObject | Iterable<any> | ArrayLike<any>;
+declare type IOBInternalObject = Iterable<any> | ArrayLike<any>;
+declare type IOBTarget = object | IOBInternalObject;
 declare const enum RECORD {
     OBSERVER = 0,
     KEY = 1,
@@ -77,7 +77,7 @@ declare function runInAction(fn: Function): any;
 declare function sandbox(fn: Function): any;
 declare function runInSandbox(fn: Function, option?: SANDOBX_OPTION): any;
 declare function autorun(fn: Function, passive?: boolean | number): () => void;
-declare function observable(obj: any): any;
+declare function observable<T = IOBTarget>(obj: T): T;
 declare function computed(calc: Function): () => any;
 declare function watch(handle: Function, watcher: (new_value: any, old_value: any) => void): () => void;
 declare function reaction(handle: Function, watcher: (val: any) => void): () => void;
