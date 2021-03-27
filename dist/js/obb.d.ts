@@ -63,7 +63,7 @@ declare class Subscriber {
     clear(shallow?: boolean): void;
     unmount(shallow?: boolean): void;
     private _sandbox;
-    mount(): any;
+    mount(parent?: Subscriber): Subscriber;
     update(): any;
     addRecord(record: IRecord): void;
     is_run: boolean;

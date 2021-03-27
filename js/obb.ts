@@ -242,7 +242,10 @@ class Observer<T extends object = any> {
 class Subscriber {
     parent: Subscriber;
     children: Array<Subscriber> = [];
-    constructor(public fn: Function, public passive?: boolean | number) {
+    constructor(
+        public fn: Function,
+        public passive?: boolean | number
+    ) {
     }
     private _deps: Set<ISubscriberSet> = new Set();
     undepend(set: ISubscriberSet) {
@@ -278,16 +281,16 @@ class Subscriber {
         this.parent = undefined;
     }
     private _sandbox: ISandbox;
-    mount() {
+    mount(parent?: Subscriber): Subscriber {
         if (this.parent !== undefined) {
             // 可能存者一个 Subscriber 实例发生递归 mount 或其他复用执行的情况
-            return new Subscriber(this.fn).mount();
+            return new Subscriber(this.fn).mount(parent);
         }
         if (SANDBOX_STACK.length) {
             this._sandbox = SANDBOX_STACK[0];
             this._sandbox[SANDBOX.SUBSCRIBERS].push(this);
         }
-        this.parent = SUBSCRIBER_STACK[0] || null;
+        this.parent = parent || SUBSCRIBER_STACK[0] || null;
         this.parent && this.parent.children.push(this);
         this._run();
         return this;
@@ -880,22 +883,3 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
 
     target.__proto__ = Object.create(target.__proto__.__proto__, descriptors);
 }
-/*
-function obIterator3(target: any, original: any) {
-    let iterator = original.call(target);
-    let originalNext = iterator.next.bind(iterator);
-    iterator.next = function () {
-
-        let next = originalNext();
-        let { done, value } = next;
-        if (!done) {
-            value = observable(value);
-        }
-        return { done, value };
-    }
-    return iterator;
-}
-*/
-
-
-
