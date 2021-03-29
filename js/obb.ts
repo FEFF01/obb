@@ -639,7 +639,7 @@ function deepReactive(reactions: Array<Subscriber>, record?: IRecord) {
     reactions.forEach(
         record ?
             sub => sub.addRecord(record)
-            : sub => sub.update()
+            : sub => { sub.parent !== undefined && sub.update() }
     );
 }
 
