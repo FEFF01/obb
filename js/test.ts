@@ -10,6 +10,8 @@ import {
     runInAction,
     sandbox,
     runInSandbox,
+    transacts,
+    TRANSACTS_OPTION,
     SANDOBX_OPTION,
     computed,
     watch,
@@ -62,7 +64,45 @@ function log(expr: any, ...values: any) {
 
 console.log("" + observable(new Date()))
 
+
+
+
 let a = observable([1, 2, 3]);
+autorun(() => {
+    log("----------")
+    for (let v of a) {
+        log(v);
+    }
+    log("----------")
+})
+
+
+autorun(
+    () => {
+        log("a[1] = a[2] + ")
+        a[1] = a[2] + Math.random();
+    }
+)
+autorun(
+    () => {
+        log("a[2] = a[1] + ")
+        a[2] = a[1] + Math.random();
+    }
+)
+runInAction(() => {
+    //debugger;
+    transacts(
+        () => {
+            log("a[1] = 16;")
+            a[1] = 16;
+            log("a[2] = 6;")
+            a[2] = 6;
+        },
+        TRANSACTS_OPTION.WRAPUP
+    )
+    log(333);
+    //debugger;
+})
 
 
 /**

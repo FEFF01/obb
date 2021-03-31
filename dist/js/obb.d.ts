@@ -1,4 +1,4 @@
-export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, SANDOBX_OPTION, computed, watch, reaction, };
+export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, transacts, TRANSACTS_OPTION, SANDOBX_OPTION, computed, watch, reaction, };
 declare type IOBInternalObject = Iterable<any> | ArrayLike<any>;
 declare type IOBTarget = object | IOBInternalObject;
 declare const enum RECORD {
@@ -12,6 +12,14 @@ interface IRecord {
     [RECORD.KEY]: any;
     [RECORD.VALUE]: any;
     [RECORD.TYPE]: RECORD_TYPE;
+}
+declare const enum TRANSACTS_OPTION {
+    NORMAL = 0,
+    ATOM = 1,
+    SANDBOX = 2,
+    ATOM_AND_SANDBOX = 3,
+    WRAPUP = 4,
+    PLAIN = 9
 }
 declare const enum RECORD_TYPE {
     OWN = 1,
@@ -70,6 +78,7 @@ declare class Subscriber {
     res: any;
     private _run;
 }
+declare function transacts(fn: Function, option?: TRANSACTS_OPTION): any;
 declare function atom(fn: Function): any;
 declare function runInAtom(fn: Function): any;
 declare function action(fn: Function): any;

@@ -12,6 +12,8 @@ export {
     runInAction,
     sandbox,
     runInSandbox,
+    transacts,
+    TRANSACTS_OPTION,
     SANDOBX_OPTION,
     computed,
     watch,
@@ -45,11 +47,13 @@ interface IReactionState {
     [REACTION_STATE.RECORDS]: Array<IRecord>
 }
 
-const enum ACTION_TYPE {
+const enum TRANSACTS_OPTION {
     NORMAL = 0,
     ATOM = 1,
     SANDBOX = 2,
-    ATOM_AND_SANDBOX = ATOM | SANDBOX
+    ATOM_AND_SANDBOX = ATOM | SANDBOX,
+    WRAPUP = 4,
+    PLAIN = 8 | ATOM
 }
 const enum ACTION {
     DEPTH = 0,
@@ -57,7 +61,7 @@ const enum ACTION {
 }
 interface IAction {
     [ACTION.DEPTH]: number,
-    [ACTION.TYPE]: ACTION_TYPE,
+    [ACTION.TYPE]: TRANSACTS_OPTION,
 }
 
 const enum RECORD_TYPE {
@@ -224,7 +228,7 @@ class Observer<T extends object = any> {
         },
         deleteProperty: (target: IOBTarget, key: string) => {
             //console.log("deleteProperty",target,key);
-            return runInAtom(() => {
+            return _runInPlain(() => {
                 if (target.hasOwnProperty(key)) {
                     this.notify(key, target[key]);
                     this.notify(key, true, RECORD_TYPE.OWN);
@@ -337,8 +341,8 @@ function ownKeys(obj: any) {
 }
 
 
-function transacts(fn: Function, is_atom?: boolean) {
-    transacting(is_atom);
+function transacts(fn: Function, option?: TRANSACTS_OPTION) {
+    transacting(option);
     try {
         return fn();
     } catch (e) {
@@ -349,10 +353,13 @@ function transacts(fn: Function, is_atom?: boolean) {
 }
 
 function atom(fn: Function) {
-    return transacts.bind(null, fn, true);
+    return transacts.bind(null, fn, TRANSACTS_OPTION.ATOM);
 }
 function runInAtom(fn: Function) {
-    return transacts(fn, true);
+    return transacts(fn, TRANSACTS_OPTION.ATOM);
+}
+function _runInPlain(fn: Function) {
+    return transacts(fn, TRANSACTS_OPTION.PLAIN);
 }
 function action(fn: Function) {
     return transacts.bind(null, fn);
@@ -462,10 +469,13 @@ const BUILTIN_LITERAL_SET = new Set(
 
 const SHOULD_OBSERVABLE_SET: Set<Function> = new Set([
     Object, Array, Map, Set, WeakMap, WeakSet,
+    /*  
+    // 有些内构方法或对象传入这些实例的 Proxy 值会出现问题
     Float32Array, Float64Array,
     Int8Array, Int16Array, Int32Array,
     Uint8Array, Uint16Array, Uint32Array,
     Uint8ClampedArray,
+    */
 ]);
 
 function observable<T = IOBTarget>(obj: T): T {
@@ -528,15 +538,20 @@ function reaction(handle: Function, watcher: (val: any) => void) {
 
 
 function transacting(
-    is_atom?: boolean | number
+    option?: TRANSACTS_OPTION
 ) {
     let action = ACTION_STACK[0];
+    if (option === undefined) {
+        option = action
+            ? action[ACTION.TYPE] & TRANSACTS_OPTION.ATOM
+            : TRANSACTS_OPTION.NORMAL;
+    }
 
-    let type = is_atom === undefined && action
-        ? action[ACTION.TYPE] & ACTION_TYPE.ATOM
-        : (is_atom ? ACTION_TYPE.ATOM : ACTION_TYPE.NORMAL);
+    ACTION_STACK.unshift([
+        ACTION_STACK.length,
+        option
+    ]);
 
-    ACTION_STACK.unshift([is_atom && action ? action[ACTION.DEPTH] : ACTION_STACK.length, type]);
 }
 
 function diffRecords(records: Array<IRecord>, callback?: Function) {
@@ -581,11 +596,16 @@ function transacted() {
 
     let action = ACTION_STACK.shift();
     let depth = action[ACTION.DEPTH];
-
-    if (action[ACTION.TYPE] & ACTION_TYPE.ATOM && ACTION_STACK.length !== 0) {
+    if (
+        ACTION_STACK.length !== 0
+        && (
+            action[ACTION.TYPE] & (TRANSACTS_OPTION.PLAIN & ~TRANSACTS_OPTION.ATOM)
+            || action[ACTION.TYPE] & TRANSACTS_OPTION.ATOM
+            && ACTION_STACK[0][ACTION.TYPE] & TRANSACTS_OPTION.ATOM
+        )
+    ) {
         return;
     }
-
     while (
         REACTION_TARGET_LIST.length
         && REACTION_STATE_LIST[0][REACTION_STATE.DEPTH] >= depth
@@ -607,7 +627,16 @@ function transacted() {
             reactions.unshift(subscriber);
         }
     }
-    deepReactive(reactions);
+
+    if (reactions.length) {
+        if (action[ACTION.TYPE] & TRANSACTS_OPTION.WRAPUP) {
+            runInAction(function () {
+                deepReactive(reactions);
+            });
+        } else {
+            deepReactive(reactions);
+        }
+    }
 }
 
 function deepReactive(reactions: Array<Subscriber>, record?: IRecord) {
@@ -663,7 +692,7 @@ function obArray(ob: Observer<ArrayLike<any>>) {
                     const original = prototype[key];
                     return original && [key, function () {
                         let args = arguments;
-                        return runInAtom(() => original.apply(this, args));
+                        return _runInPlain(() => original.apply(this, args));
                     }]
                 }
             ),
@@ -697,7 +726,7 @@ function obArray(ob: Observer<ArrayLike<any>>) {
 
     ob._proxy_handler.set = function (_target: IOBTarget, key: any, value: any) {
         let length = target.length;
-        return runInAtom(function () {
+        return _runInPlain(function () {
             let res = original(_target, key, value);
             target.length !== length
                 && ob.notify("length", length, RECORD_TYPE.REF_AND_VOLATILE);
@@ -772,7 +801,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         add(key: any) {
 
             if (!prototype.has.call(target, key)) {
-                runInAtom(() => {
+                _runInPlain(() => {
                     let size = _size();
                     prototype.add.call(target, key);
                     size !== undefined && ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
@@ -790,7 +819,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             let size = _size();
             let res = prototype.delete.call(target, key);
             if (res) {
-                runInAtom(() => {
+                _runInPlain(() => {
                     internal_ob.notify(key, value);
                     internal_ob.notify(key, true, RECORD_TYPE.OWN);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
@@ -804,7 +833,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             if (!size) {
                 return;
             }
-            runInAtom(() => {
+            _runInPlain(() => {
                 prototype.forEach.call(
                     target,
                     (value: any, key: any) => {
