@@ -68,7 +68,6 @@ import  {
 
 let a = observable([1, 2, 3]);
 
-
 /**
  * 默认配置的 sandbox 内部产生的可观测变更
  * 都会在 sandbox 执行结束后得到还原
@@ -111,15 +110,15 @@ runInSandbox(() => {
          * 当前 autorun 中，只依赖 a[2] 
          * 不会产生对 a[1] 的订阅   
          */
-        runInSandbox(() => {
+        sandbox(() => {
             console.log("a[1]", a[1]);  // a[1] 1
-            runInSandbox(() => {
+            sandbox(() => {
                 console.log(
-                    "a[2]", 
+                    "a[2]",
                     a[2]
                 );  // a[2] 2
-            }, SANDOBX_OPTION.NORMAL)
-        }, SANDOBX_OPTION.PREVENT_COLLECT);
+            }, SANDOBX_OPTION.NORMAL)()
+        }, SANDOBX_OPTION.PREVENT_COLLECT)();
     });
 
     a[1] += 1;  //
@@ -133,6 +132,5 @@ console.log(
     "JSON.stringify(a)",
     JSON.stringify(a)
 );  // JSON.stringify(a) [1,2,3]
-
 ```
 

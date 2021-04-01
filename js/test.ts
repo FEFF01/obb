@@ -68,42 +68,6 @@ console.log("" + observable(new Date()))
 
 
 let a = observable([1, 2, 3]);
-autorun(() => {
-    log("----------")
-    for (let v of a) {
-        log(v);
-    }
-    log("----------")
-})
-
-
-autorun(
-    () => {
-        log("a[1] = a[2] + ")
-        a[1] = a[2] + Math.random();
-    }
-)
-autorun(
-    () => {
-        log("a[2] = a[1] + ")
-        a[2] = a[1] + Math.random();
-    }
-)
-runInAction(() => {
-    //debugger;
-    transacts(
-        () => {
-            log("a[1] = 16;")
-            a[1] = 16;
-            log("a[2] = 6;")
-            a[2] = 6;
-        },
-        TRANSACTS_OPTION.WRAPUP
-    )
-    log(333);
-    //debugger;
-})
-
 
 /**
  * 默认配置的 sandbox 内部产生的可观测变更
@@ -147,15 +111,15 @@ runInSandbox(() => {
          * 当前 autorun 中，只依赖 a[2] 
          * 不会产生对 a[1] 的订阅   
          */
-        runInSandbox(() => {
+        sandbox(() => {
             console.log("a[1]", a[1]);  // a[1] 1
-            runInSandbox(() => {
+            sandbox(() => {
                 console.log(
                     "a[2]",
                     a[2]
                 );  // a[2] 2
-            }, SANDOBX_OPTION.NORMAL)
-        }, SANDOBX_OPTION.PREVENT_COLLECT);
+            }, SANDOBX_OPTION.NORMAL)()
+        }, SANDOBX_OPTION.PREVENT_COLLECT)();
     });
 
     a[1] += 1;  //
@@ -170,7 +134,45 @@ console.log(
     JSON.stringify(a)
 );  // JSON.stringify(a) [1,2,3]
 
-//throw ""
+
+
+
+autorun(() => {
+    log("----------")
+    for (let v of a) {
+        log(v);
+    }
+    log("----------")
+})
+
+
+autorun(
+    () => {
+        log("a[1] = a[2] + ")
+        a[1] = a[2] + Math.random();
+    }
+)
+autorun(
+    () => {
+        log("a[2] = a[1] + ")
+        a[2] = a[1] + Math.random();
+    }
+)
+runInAction(() => {
+    //debugger;
+    transacts(
+        TRANSACTS_OPTION.WRAPUP,
+        () => {
+            log("a[1] = 16;")
+            a[1] = 16;
+            log("a[2] = 6;")
+            a[2] = 6;
+        }
+    )
+    log(333);
+    //debugger;
+})
+
 autorun(function () {
     console.log("000000001111", map.get("a"))
 })
@@ -180,16 +182,16 @@ runInSandbox(function () {
         console.log("1111", map.get("a"))
         runInSandbox(function () {
             console.log("222", map.get("b"));
-            runInSandbox(function () {
+            sandbox(function () {
                 console.log("333", map.get("c"));
-            }, SANDOBX_OPTION.CLEAN_SUBSCRIBE)
+            }, SANDOBX_OPTION.CLEAN_SUBSCRIBE)()
 
         })
     })
     map.set("a", [333])
-    runInSandbox(function () {
+    sandbox(function () {
         map.set("a", [444])
-    }, SANDOBX_OPTION.NORMAL)
+    }, SANDOBX_OPTION.NORMAL)()
     runInSandbox(function () {
         map.set("a", [555])
     })
@@ -237,9 +239,9 @@ map.get("a")[0] = 4;
 autorun(function () {
     runInSandbox(function () {
         console.log("Sandbox", map.get("b"))
-        runInSandbox(function () {
+        sandbox(function () {
             console.log("NORMAL", map.get("a"))
-        }, SANDOBX_OPTION.NORMAL)
+        }, SANDOBX_OPTION.NORMAL)()
     })
 })
 

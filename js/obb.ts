@@ -1,26 +1,6 @@
 
 
 
-export {
-    Observer,
-    Subscriber,
-    observable,
-    autorun,
-    atom,
-    runInAtom,
-    action,
-    runInAction,
-    sandbox,
-    runInSandbox,
-    transacts,
-    TRANSACTS_OPTION,
-    SANDOBX_OPTION,
-    computed,
-    watch,
-    reaction,
-};
-
-
 type IOBInternalObject = Iterable<any> | ArrayLike<any>;
 type IOBTarget = object | IOBInternalObject;
 
@@ -47,13 +27,16 @@ interface IReactionState {
     [REACTION_STATE.RECORDS]: Array<IRecord>
 }
 
+
+
 const enum TRANSACTS_OPTION {
-    NORMAL = 0,
-    ATOM = 1,
-    SANDBOX = 2,
+    ACTION = 1,
+    DEFAULT = ACTION,
+    ATOM = 2,
+    SANDBOX = 4,
     ATOM_AND_SANDBOX = ATOM | SANDBOX,
-    WRAPUP = 4,
-    PLAIN = 8 | ATOM
+    WRAPUP = 8,
+    PLAIN = 16 | ATOM
 }
 const enum ACTION {
     DEPTH = 0,
@@ -72,12 +55,16 @@ const enum RECORD_TYPE {
     REF_AND_READONLY = REF | READONLY,
     REF_AND_VOLATILE = REF | VOLATILE
 }
-enum SANDOBX_OPTION {   // 非 const 使得外部非 ts 环境能正常使用
+const enum SANDOBX_OPTION {   // 非 const 使得外部非 ts 环境能正常使用
     PREVENT_COLLECT = 0b01,
     CLEAN_SUBSCRIBE = 0b010,
     CLEAN_CHANGE = 0b0100,
     DEFAULT = PREVENT_COLLECT | CLEAN_SUBSCRIBE | CLEAN_CHANGE,
     NORMAL = 0b0,
+}
+enum SUBSCRIBE_OPTION {
+    DEFAULT = 0,
+    PREVENT_COLLECT = 1
 }
 
 const enum SANDBOX {
@@ -144,7 +131,7 @@ class Observer<T extends object = any> {
     }
     collect(prop: any, type: RECORD_TYPE = RECORD_TYPE.REF) {
         let subscriber = SUBSCRIBER_STACK[0];
-        if (subscriber && !subscriber.passive) {
+        if (subscriber && !(subscriber.option & SUBSCRIBE_OPTION.PREVENT_COLLECT)) {
             let map = this._map(type);
             let ref = map.get(prop);
             ref || map.set(prop, ref = new Set());
@@ -248,7 +235,7 @@ class Subscriber {
     children: Array<Subscriber> = [];
     constructor(
         public fn: Function,
-        public passive?: boolean | number
+        public option: SUBSCRIBE_OPTION = SUBSCRIBE_OPTION.DEFAULT
     ) {
     }
     private _deps: Set<ISubscriberSet> = new Set();
@@ -341,10 +328,10 @@ function ownKeys(obj: any) {
 }
 
 
-function transacts(fn: Function, option?: TRANSACTS_OPTION) {
+function transacts(option: TRANSACTS_OPTION, fn: Function, ...args: Array<any>) {
     transacting(option);
     try {
-        return fn();
+        return fn(...args);
     } catch (e) {
         throw e;
     } finally {
@@ -352,29 +339,49 @@ function transacts(fn: Function, option?: TRANSACTS_OPTION) {
     }
 }
 
-function atom(fn: Function) {
+
+type ReflectCall = (fn: Function, ...args: Array<any>) => any;
+
+function atom<T = Function>(fn: T): T {
     return transacts.bind(null, fn, TRANSACTS_OPTION.ATOM);
 }
+
+/*
 function runInAtom(fn: Function) {
-    return transacts(fn, TRANSACTS_OPTION.ATOM);
-}
+    return transacts(TRANSACTS_OPTION.ATOM, fn);
+}*/
+const runInAtom: ReflectCall = transacts.bind(null, TRANSACTS_OPTION.ATOM);
+
+/*
 function _runInPlain(fn: Function) {
-    return transacts(fn, TRANSACTS_OPTION.PLAIN);
-}
-function action(fn: Function) {
-    return transacts.bind(null, fn);
-}
-function runInAction(fn: Function) {
-    return transacts(fn);
+    return transacts(TRANSACTS_OPTION.PLAIN, fn);
+}*/
+const _runInPlain: ReflectCall = transacts.bind(null, TRANSACTS_OPTION.PLAIN);
+
+function action<T = Function>(fn: T): T {
+    return transacts.bind(null, TRANSACTS_OPTION.ACTION, fn);
 }
 
-function sandbox(fn: Function) {
-    return runInSandbox.bind(null, fn);
+/*
+function runInAction(fn: Function) {
+    return transacts(TRANSACTS_OPTION.NORMAL, fn);
+}*/
+const runInAction: ReflectCall = transacts.bind(null, TRANSACTS_OPTION.ACTION)
+
+
+function sandbox<T = Function>(fn: T, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFAULT): T {
+    return _runInSandbox.bind(null, option, fn);
 }
-function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFAULT) {
+const runInSandbox: ReflectCall = _runInSandbox.bind(null, SANDOBX_OPTION.DEFAULT);
+
+function _runInSandbox(
+    option: SANDOBX_OPTION,
+    fn: Function,
+    ...args: Array<any>
+) {
     let parent_sandbox = SANDBOX_STACK[0];
     let parent_subscrber = SUBSCRIBER_STACK[0];
-    let passive = parent_subscrber && parent_subscrber.passive;
+    let bakopt = parent_subscrber && parent_subscrber.option;
     let subs = option & SANDOBX_OPTION.CLEAN_CHANGE || !parent_sandbox
         ? []
         : parent_sandbox[SANDBOX.SUBSCRIBERS];
@@ -383,8 +390,11 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
         ? []
         : parent_sandbox[SANDBOX.RECORDS];
     parent_subscrber && (
-        parent_subscrber.passive = option & SANDOBX_OPTION.PREVENT_COLLECT
+        parent_subscrber.option = option & SANDOBX_OPTION.PREVENT_COLLECT
+            ? (bakopt | SUBSCRIBE_OPTION.PREVENT_COLLECT)
+            : (bakopt & ~SUBSCRIBE_OPTION.PREVENT_COLLECT)
     );
+
     SANDBOX_STACK.unshift(
         [
             records,
@@ -398,7 +408,7 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
     );
 
     try {
-        return fn();
+        return fn(...args);
     } catch (e) {
         throw e;
     } finally {
@@ -420,7 +430,7 @@ function runInSandbox(fn: Function, option: SANDOBX_OPTION = SANDOBX_OPTION.DEFA
                 subs
             )
         }
-        parent_subscrber && (parent_subscrber.passive = passive);
+        parent_subscrber && (parent_subscrber.option = bakopt);
     }
 }
 function cleanChanges(records: Array<IRecord>) {
@@ -453,8 +463,8 @@ function cleanChanges(records: Array<IRecord>) {
 }
 
 
-function autorun(fn: Function, passive: boolean | number = false) {
-    let sub = new Subscriber(fn, passive);
+function autorun(fn: Function/*, passive: boolean | number = false*/): () => void {
+    let sub = new Subscriber(fn/*, passive*/);
     sub.mount();
     return function disposer() {
         sub.unmount();
@@ -544,7 +554,7 @@ function transacting(
     if (option === undefined) {
         option = action
             ? action[ACTION.TYPE] & TRANSACTS_OPTION.ATOM
-            : TRANSACTS_OPTION.NORMAL;
+            : TRANSACTS_OPTION.DEFAULT;
     }
 
     ACTION_STACK.unshift([
@@ -650,6 +660,7 @@ function deepReactive(reactions: Array<Subscriber>, record?: IRecord) {
     }
     next: for (let i = 0; i < reactions.length; i++) {
         let sub = reactions[i];
+
         while ((sub = sub.parent)) {
             if (sub.is_run || !inScoped(sub)) {
                 break;
@@ -665,10 +676,13 @@ function deepReactive(reactions: Array<Subscriber>, record?: IRecord) {
             reactions.splice(i--, 1);
         }
     }
+
     reactions.forEach(
         record ?
             sub => sub.addRecord(record)
-            : sub => { sub.parent !== undefined && sub.update() }
+            : sub => {
+                sub.parent !== undefined && sub.update();
+            }
     );
 }
 
@@ -912,3 +926,27 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
 
     target.__proto__ = Object.create(target.__proto__.__proto__, descriptors);
 }
+
+
+
+
+
+export {
+    Observer,
+    Subscriber,
+    observable,
+    autorun,
+    atom,
+    runInAtom,
+    action,
+    runInAction,
+    sandbox,
+    runInSandbox,
+    transacts,
+    TRANSACTS_OPTION,
+    SANDOBX_OPTION,
+    SUBSCRIBE_OPTION,
+    computed,
+    watch,
+    reaction,
+};

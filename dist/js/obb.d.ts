@@ -1,4 +1,3 @@
-export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, transacts, TRANSACTS_OPTION, SANDOBX_OPTION, computed, watch, reaction, };
 declare type IOBInternalObject = Iterable<any> | ArrayLike<any>;
 declare type IOBTarget = object | IOBInternalObject;
 declare const enum RECORD {
@@ -14,12 +13,13 @@ interface IRecord {
     [RECORD.TYPE]: RECORD_TYPE;
 }
 declare const enum TRANSACTS_OPTION {
-    NORMAL = 0,
-    ATOM = 1,
-    SANDBOX = 2,
-    ATOM_AND_SANDBOX = 3,
-    WRAPUP = 4,
-    PLAIN = 9
+    ACTION = 1,
+    DEFAULT = 1,
+    ATOM = 2,
+    SANDBOX = 4,
+    ATOM_AND_SANDBOX = 6,
+    WRAPUP = 8,
+    PLAIN = 18
 }
 declare const enum RECORD_TYPE {
     OWN = 1,
@@ -29,12 +29,16 @@ declare const enum RECORD_TYPE {
     REF_AND_READONLY = 6,
     REF_AND_VOLATILE = 10
 }
-declare enum SANDOBX_OPTION {
+declare const enum SANDOBX_OPTION {
     PREVENT_COLLECT = 1,
     CLEAN_SUBSCRIBE = 2,
     CLEAN_CHANGE = 4,
     DEFAULT = 7,
     NORMAL = 0
+}
+declare enum SUBSCRIBE_OPTION {
+    DEFAULT = 0,
+    PREVENT_COLLECT = 1
 }
 declare type ISubscriberSet = Set<Subscriber>;
 declare class Observer<T extends object = any> {
@@ -61,10 +65,10 @@ declare class Observer<T extends object = any> {
 }
 declare class Subscriber {
     fn: Function;
-    passive?: boolean | number;
+    option: SUBSCRIBE_OPTION;
     parent: Subscriber;
     children: Array<Subscriber>;
-    constructor(fn: Function, passive?: boolean | number);
+    constructor(fn: Function, option?: SUBSCRIBE_OPTION);
     private _deps;
     undepend(set: ISubscriberSet): void;
     depend(set: ISubscriberSet): void;
@@ -78,15 +82,17 @@ declare class Subscriber {
     res: any;
     private _run;
 }
-declare function transacts(fn: Function, option?: TRANSACTS_OPTION): any;
-declare function atom(fn: Function): any;
-declare function runInAtom(fn: Function): any;
-declare function action(fn: Function): any;
-declare function runInAction(fn: Function): any;
-declare function sandbox(fn: Function): any;
-declare function runInSandbox(fn: Function, option?: SANDOBX_OPTION): any;
-declare function autorun(fn: Function, passive?: boolean | number): () => void;
+declare function transacts(option: TRANSACTS_OPTION, fn: Function, ...args: Array<any>): any;
+declare type ReflectCall = (fn: Function, ...args: Array<any>) => any;
+declare function atom<T = Function>(fn: T): T;
+declare const runInAtom: ReflectCall;
+declare function action<T = Function>(fn: T): T;
+declare const runInAction: ReflectCall;
+declare function sandbox<T = Function>(fn: T, option?: SANDOBX_OPTION): T;
+declare const runInSandbox: ReflectCall;
+declare function autorun(fn: Function): () => void;
 declare function observable<T = IOBTarget>(obj: T): T;
 declare function computed(calc: Function): () => any;
 declare function watch(handle: Function, watcher: (new_value: any, old_value: any) => void): () => void;
 declare function reaction(handle: Function, watcher: (val: any) => void): () => void;
+export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, transacts, TRANSACTS_OPTION, SANDOBX_OPTION, SUBSCRIBE_OPTION, computed, watch, reaction, };

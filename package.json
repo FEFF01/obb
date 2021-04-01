@@ -1,6 +1,6 @@
 {
   "name": "obb",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Simple and lite observer utility",
   "main": "./dist/js/obb.js",
   "private": false,
