@@ -38,9 +38,14 @@ const enum TRANSACTS_OPTION {
     WRAPUP = 8,
     PLAIN = 16 | ATOM
 }
+type TRANSACTS_CONFIG = TRANSACTS_OPTION | {
+    option: TRANSACTS_OPTION,
+    hook?: (reactions: Array<Subscriber>) => void
+}
 const enum ACTION {
     DEPTH = 0,
     TYPE = 1,
+    HOOK = 2
 }
 interface IAction {
     [ACTION.DEPTH]: number,
@@ -64,7 +69,8 @@ const enum SANDOBX_OPTION {   // 非 const 使得外部非 ts 环境能正常使
 }
 enum SUBSCRIBE_OPTION {
     DEFAULT = 0,
-    PREVENT_COLLECT = 1
+    PREVENT_COLLECT = 1,
+    COMPUTED = 2
 }
 
 const enum SANDBOX {
@@ -153,10 +159,10 @@ class Observer<T extends object = any> {
 
         let set = this._map(type).get(prop);
         if (set && set.size) {
-            deepReactive(
-                Array.from(set),
-                ACTION_STACK.length && record
-            );
+            let reactions = Array.from(set);
+            ACTION_STACK.length
+                ? addRecord(reactions, record)
+                : deepReactive(reactions);
         }
     }
 
@@ -246,6 +252,13 @@ class Subscriber {
     depend(set: ISubscriberSet) {
         this._deps.add(set);
         set.add(this);
+        if (
+            this.option & SUBSCRIBE_OPTION.COMPUTED
+            && SUBSCRIBER_STACK.length > 1
+            && !(SUBSCRIBER_STACK[1].option & SUBSCRIBE_OPTION.PREVENT_COLLECT)
+        ) {
+            SUBSCRIBER_STACK[1].depend(set);    // 0 为 computed 的当前订阅
+        }
     }
     clear(shallow?: boolean) {
         this._deps.forEach(ref => ref.delete(this));
@@ -261,7 +274,7 @@ class Subscriber {
     unmount(shallow?: boolean) {    // shallow 参数暂时用于节省不必要的消耗
         this.clear(shallow);
         if (!shallow) {
-            let siblings = this.parent?.children;
+            let siblings = this.parent && this.parent.children;
             siblings && siblings.splice(siblings.indexOf(this), 1);
             if (this._sandbox) {
                 let index = this._sandbox[SANDBOX.SUBSCRIBERS].indexOf(this);
@@ -277,11 +290,24 @@ class Subscriber {
             // 可能存者一个 Subscriber 实例发生递归 mount 或其他复用执行的情况
             return new Subscriber(this.fn).mount(parent);
         }
+        this.parent = parent || SUBSCRIBER_STACK[0];
+        if (this.parent) {
+            if (this.parent.parent === undefined) {
+                /**
+                 * 可能存在挂载下一个子订阅时当前订阅已被释放（当前订阅方法执行过程中产生更改导致上级订阅刷新）
+                 * 这不一定是使用放方发生错误，但挂载方不应该错误的允许此行为
+                 */
+                this.parent = undefined;
+                return this;
+            }
+        } else {
+            this.parent = null
+        }
+
         if (SANDBOX_STACK.length) {
             this._sandbox = SANDBOX_STACK[0];
             this._sandbox[SANDBOX.SUBSCRIBERS].push(this);
         }
-        this.parent = parent || SUBSCRIBER_STACK[0] || null;
         this.parent && this.parent.children.push(this);
         this._run();
         return this;
@@ -304,9 +330,12 @@ class Subscriber {
     }
     is_run = false;
     res: any;
+    brokens: Array<Subscriber> = [];
+    accu = 0;
     private _run() {
         this.is_run = true;
         SUBSCRIBER_STACK.unshift(this);
+        this.accu += 1;
         try {
             return this.res = this.fn();
         } catch (e) {
@@ -314,6 +343,7 @@ class Subscriber {
         } finally {
             SUBSCRIBER_STACK.shift();
             this.is_run = false;
+            this.brokens.length = 0;
         }
     }
 }
@@ -328,7 +358,7 @@ function ownKeys(obj: any) {
 }
 
 
-function transacts(option: TRANSACTS_OPTION, fn: Function, ...args: Array<any>) {
+function transacts(option: TRANSACTS_CONFIG, fn: Function, ...args: Array<any>) {
     transacting(option);
     try {
         return fn(...args);
@@ -346,26 +376,17 @@ function atom<T = Function>(fn: T): T {
     return transacts.bind(null, fn, TRANSACTS_OPTION.ATOM);
 }
 
-/*
-function runInAtom(fn: Function) {
-    return transacts(TRANSACTS_OPTION.ATOM, fn);
-}*/
+
 const runInAtom: ReflectCall = transacts.bind(null, TRANSACTS_OPTION.ATOM);
 
-/*
-function _runInPlain(fn: Function) {
-    return transacts(TRANSACTS_OPTION.PLAIN, fn);
-}*/
+
 const _runInPlain: ReflectCall = transacts.bind(null, TRANSACTS_OPTION.PLAIN);
 
 function action<T = Function>(fn: T): T {
     return transacts.bind(null, TRANSACTS_OPTION.ACTION, fn);
 }
 
-/*
-function runInAction(fn: Function) {
-    return transacts(TRANSACTS_OPTION.NORMAL, fn);
-}*/
+
 const runInAction: ReflectCall = transacts.bind(null, TRANSACTS_OPTION.ACTION)
 
 
@@ -463,8 +484,8 @@ function cleanChanges(records: Array<IRecord>) {
 }
 
 
-function autorun(fn: Function/*, passive: boolean | number = false*/): () => void {
-    let sub = new Subscriber(fn/*, passive*/);
+function autorun(fn: Function): () => void {
+    let sub = new Subscriber(fn);
     sub.mount();
     return function disposer() {
         sub.unmount();
@@ -512,8 +533,9 @@ function computed(calc: Function) {
     let subscriber = new Subscriber(
         function () {
             (changed ^= 1) && (value = calc());
-        }
+        }, SUBSCRIBE_OPTION.COMPUTED
     );
+    subscriber.parent = null;
     return function () {
         changed || subscriber.update();
         return value;
@@ -548,18 +570,23 @@ function reaction(handle: Function, watcher: (val: any) => void) {
 
 
 function transacting(
-    option?: TRANSACTS_OPTION
+    option?: TRANSACTS_CONFIG
 ) {
     let action = ACTION_STACK[0];
+    let hook: Function;
     if (option === undefined) {
         option = action
             ? action[ACTION.TYPE] & TRANSACTS_OPTION.ATOM
             : TRANSACTS_OPTION.DEFAULT;
+    } else if (typeof option !== "number") {
+        hook = option.hook;
+        option = option.option;
     }
 
     ACTION_STACK.unshift([
         ACTION_STACK.length,
-        option
+        option,
+        hook
     ]);
 
 }
@@ -606,6 +633,7 @@ function transacted() {
 
     let action = ACTION_STACK.shift();
     let depth = action[ACTION.DEPTH];
+    let hook = action[ACTION.HOOK];
     if (
         ACTION_STACK.length !== 0
         && (
@@ -638,6 +666,7 @@ function transacted() {
         }
     }
 
+    hook && hook(reactions);
     if (reactions.length) {
         if (action[ACTION.TYPE] & TRANSACTS_OPTION.WRAPUP) {
             runInAction(function () {
@@ -649,41 +678,55 @@ function transacted() {
     }
 }
 
-function deepReactive(reactions: Array<Subscriber>, record?: IRecord) {
+function addRecord(reactions: Array<Subscriber>, record: IRecord) {
+    for (let i = 0; i < reactions.length; i++) {
+        reactions[i].addRecord(record);
+    }
+}
+
+function deepReactive(reactions: Array<Subscriber>) {
 
     let sandbox = SANDBOX_STACK[0];
     let includes = sandbox
         && sandbox[SANDBOX.OPTION] & SANDOBX_OPTION.CLEAN_CHANGE
         && sandbox[SANDBOX.SUBSCRIBERS];
-    function inScoped(sub: Subscriber) {
+    const inScoped = function (sub: Subscriber) {
         return !includes || includes.indexOf(sub) >= 0;
     }
-    next: for (let i = 0; i < reactions.length; i++) {
-        let sub = reactions[i];
 
+    let sub: Subscriber;
+    let index: number;
+    next: for (let i = reactions.length - 1; i >= 0; i--) {
+        sub = reactions[i];
+        if (sub.option & SUBSCRIBE_OPTION.COMPUTED) {
+            reactions.splice(i, 1);
+            sub.update();
+            continue;
+        }
         while ((sub = sub.parent)) {
             if (sub.is_run || !inScoped(sub)) {
                 break;
             }
-            if (reactions.indexOf(sub) >= 0) {
-                reactions.splice(i--, 1);
+            index = reactions.indexOf(sub)
+            if (index >= 0) {
+                reactions[index].brokens.unshift(reactions[i]);
+                //reactions[i].brokens.length = 0;
+                reactions.splice(i, 1);
                 continue next;
             }
         }
         sub = reactions[i];
 
         if (sub.is_run || !inScoped(sub)) {
-            reactions.splice(i--, 1);
+            reactions.splice(i, 1);
         }
     }
 
-    reactions.forEach(
-        record ?
-            sub => sub.addRecord(record)
-            : sub => {
-                sub.parent !== undefined && sub.update();
-            }
-    );
+    for (let i = 0; i < reactions.length; i++) {
+        sub = reactions[i];
+        sub.parent !== undefined && sub.update();
+    }
+
 }
 
 function equal(a: any, b: any) {
@@ -900,7 +943,6 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                             return { done, value };
                         }
                         return iterator;
-                        //return obIterator(target, original);
                     }
                 }
                 return res;
@@ -948,5 +990,5 @@ export {
     SUBSCRIBE_OPTION,
     computed,
     watch,
-    reaction,
+    reaction
 };

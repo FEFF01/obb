@@ -21,6 +21,10 @@ declare const enum TRANSACTS_OPTION {
     WRAPUP = 8,
     PLAIN = 18
 }
+declare type TRANSACTS_CONFIG = TRANSACTS_OPTION | {
+    option: TRANSACTS_OPTION;
+    hook?: (reactions: Array<Subscriber>) => void;
+};
 declare const enum RECORD_TYPE {
     OWN = 1,
     REF = 2,
@@ -38,7 +42,8 @@ declare const enum SANDOBX_OPTION {
 }
 declare enum SUBSCRIBE_OPTION {
     DEFAULT = 0,
-    PREVENT_COLLECT = 1
+    PREVENT_COLLECT = 1,
+    COMPUTED = 2
 }
 declare type ISubscriberSet = Set<Subscriber>;
 declare class Observer<T extends object = any> {
@@ -80,9 +85,11 @@ declare class Subscriber {
     addRecord(record: IRecord): void;
     is_run: boolean;
     res: any;
+    brokens: Array<Subscriber>;
+    accu: number;
     private _run;
 }
-declare function transacts(option: TRANSACTS_OPTION, fn: Function, ...args: Array<any>): any;
+declare function transacts(option: TRANSACTS_CONFIG, fn: Function, ...args: Array<any>): any;
 declare type ReflectCall = (fn: Function, ...args: Array<any>) => any;
 declare function atom<T = Function>(fn: T): T;
 declare const runInAtom: ReflectCall;
@@ -95,4 +102,4 @@ declare function observable<T = IOBTarget>(obj: T): T;
 declare function computed(calc: Function): () => any;
 declare function watch(handle: Function, watcher: (new_value: any, old_value: any) => void): () => void;
 declare function reaction(handle: Function, watcher: (val: any) => void): () => void;
-export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, transacts, TRANSACTS_OPTION, SANDOBX_OPTION, SUBSCRIBE_OPTION, computed, watch, reaction, };
+export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, transacts, TRANSACTS_OPTION, SANDOBX_OPTION, SUBSCRIBE_OPTION, computed, watch, reaction };
