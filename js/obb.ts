@@ -106,6 +106,13 @@ const MASK_UNDEFINED = ["undefined"];
 
 
 class Observer<T extends object = any> {
+    static TO_RAW(obj: any) {
+        let ob = OBSERVER_MAP.get(obj);
+        return ob ? ob.target : obj;
+    }
+    static TO_OB(obj: any) {
+        return OBSERVER_MAP.get(obj);
+    }
     readonly proxy: any;
     readonly refmap: Map<any, ISubscriberSet> = new Map();
     readonly ownmap: Map<any, ISubscriberSet> = new Map();
@@ -203,12 +210,18 @@ class Observer<T extends object = any> {
             let own = target.hasOwnProperty(prop);
             let eq = equal(bak_value, raw_value);
 
-            eq && own || (target[prop] = raw_value);
-            if (!own) {
-                this.notify(prop, false, RECORD_TYPE.OWN);
-                this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+            if (!eq || !own) {
+                _runInPlain(() => {
+                    target[prop] = raw_value;
+                    if (!own) {
+                        this.notify(prop, false, RECORD_TYPE.OWN);
+                        this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+                    }
+                    eq || this.notify(prop, bak_value);
+                    (eq && own) || this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+                })
             }
-            eq || this.notify(prop, bak_value);
+
             return true;
         },
         ownKeys: (target: IOBTarget) => {
@@ -226,17 +239,19 @@ class Observer<T extends object = any> {
                     this.notify(key, target[key]);
                     this.notify(key, true, RECORD_TYPE.OWN);
                     this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+                    this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
                 }
                 return delete target[key];
             });
         },
     }
 
-
-
 }
 
 class Subscriber {
+    static get PARENT() {
+        return SUBSCRIBER_STACK[0];
+    }
     parent: Subscriber;
     children: Array<Subscriber> = [];
     constructor(
@@ -285,6 +300,7 @@ class Subscriber {
         this.parent = undefined;
     }
     private _sandbox: ISandbox;
+
     mount(parent?: Subscriber): Subscriber {
         if (this.parent !== undefined) {
             // 可能存者一个 Subscriber 实例发生递归 mount 或其他复用执行的情况
@@ -542,15 +558,20 @@ function computed(calc: Function) {
     }
 }
 
-function watch(handle: Function, watcher: (new_value: any, old_value: any) => void) {
+function watch(
+    handle: Function,
+    watcher: (new_value: any, old_value: any) => void,
+    immediately?: boolean
+) {
     let value_stack: Array<any> = [];
 
     let subscriber = new Subscriber(function () {
         value_stack.unshift(handle());
-        if (value_stack.length > 1) {
-            watcher(value_stack[0], value_stack[1]);
-            value_stack.length = 1;
+        if (immediately || value_stack.length > 1) {
+            let [new_val, old_val] = value_stack;
+            equal(new_val, old_val) || watcher(new_val, old_val);
         }
+        value_stack.length = 1;
     });
     subscriber.mount();
 
@@ -758,7 +779,7 @@ function obArray(ob: Observer<ArrayLike<any>>) {
                 function (key) {
                     const original = prototype[key];
                     return original && [key, function () {
-                        ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
+                        ob.collect(MASK_ITERATE, RECORD_TYPE.REF);
                         let index = 0;
                         let proxy = ob.proxy;
                         return {
@@ -847,12 +868,20 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         set(key: any, value: any) {
             let kob = OBSERVER_MAP.get(key);
             kob && (key = kob.target);
-
             let has_key = prototype.has.call(target, key);
-            let bak_value = has_key ? prototype.get.call(target, key) : undefined;
-            prototype.set.call(target, key, value);
-            has_key || internal_ob.notify(key, false, RECORD_TYPE.OWN)
-            internal_ob.notify(key, bak_value);
+            let bak_value = has_key ? prototype.get.call(target, key) : MASK_UNDEFINED;
+
+            if (!has_key || !equal(bak_value, value)) {
+                _runInPlain(() => {
+                    prototype.set.call(target, key, value);
+                    if (!has_key) {
+                        internal_ob.notify(key, false, RECORD_TYPE.OWN);
+                        internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+                    }
+                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+                    internal_ob.notify(key, bak_value);
+                });
+            }
             return this;
         },
         add(key: any) {
@@ -865,6 +894,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     internal_ob.notify(key, false, RECORD_TYPE.OWN)
                     internal_ob.notify(key, MASK_UNDEFINED);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
                 });
             }
             return this;
@@ -880,6 +910,8 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     internal_ob.notify(key, value);
                     internal_ob.notify(key, true, RECORD_TYPE.OWN);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+
                     size !== undefined && ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
                 });
             }
@@ -899,6 +931,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     }
                 )
                 internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
+                internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
                 ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
 
                 prototype.clear.call(target);
@@ -906,6 +939,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         },
         forEach(cb: Function, ...args: any) {
             internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
+            internal_ob.collect(MASK_ITERATE, RECORD_TYPE.REF);
             return prototype.forEach.call(target, function (value: any, ...rest: any) {
                 cb(observable(value), ...rest)
             }, ...args);
@@ -919,16 +953,34 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         },
         size: _size,
         ...[
-            ["keys", (value: [any, any]) => value[0]],
-            ["entries", (value: [any, any]) => [value[0], observable(value[1])]],
-            ["values", (value: [any, any]) => observable(value[1])],
-            [Symbol.iterator, (value: [any, any]) => observable(value[1])]
+            [
+                "keys",
+                (value: [any, any]) => value[0],
+                [RECORD_TYPE.OWN]
+            ],
+            [
+                "entries",
+                (value: [any, any]) => [value[0], observable(value[1])],
+                [RECORD_TYPE.OWN, RECORD_TYPE.REF]
+            ],
+            [
+                "values",
+                (value: [any, any]) => observable(value[1]),
+                [RECORD_TYPE.REF]
+            ],
+            [
+                Symbol.iterator,
+                (value: [any, any]) => observable(value[1]),
+                [RECORD_TYPE.OWN, RECORD_TYPE.REF]
+            ]
         ].reduce(
-            function (res, [key, _value]: [string | symbol, any]) {
+            function (res, [key, _value, types]: [string | symbol, any, any]) {
                 let original = prototype["entries"/*key*/];
                 if (original) {
                     res[key] = function () {
-                        internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
+                        for (let type of types) {
+                            internal_ob.collect(MASK_ITERATE, type);
+                        }
 
                         let iterator = original.call(target);
                         let originalNext = iterator.next.bind(iterator);
@@ -936,8 +988,6 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                             let { done, value } = originalNext();
 
                             if (!done) {
-                                internal_ob.collect(value[0]);
-                                internal_ob.collect(value[0], RECORD_TYPE.OWN);
                                 value = _value(value);
                             }
                             return { done, value };
@@ -970,9 +1020,6 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
 }
 
 
-
-
-
 export {
     Observer,
     Subscriber,
@@ -990,5 +1037,8 @@ export {
     SUBSCRIBE_OPTION,
     computed,
     watch,
-    reaction
+    reaction,
+    MASK_ITERATE,
+    MASK_UNDEFINED,
+    RECORD_TYPE
 };

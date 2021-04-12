@@ -46,8 +46,12 @@ declare enum SUBSCRIBE_OPTION {
     COMPUTED = 2
 }
 declare type ISubscriberSet = Set<Subscriber>;
+declare const MASK_ITERATE: string[];
+declare const MASK_UNDEFINED: string[];
 declare class Observer<T extends object = any> {
     readonly target: T;
+    static TO_RAW(obj: any): any;
+    static TO_OB(obj: any): Observer<any>;
     readonly proxy: any;
     readonly refmap: Map<any, ISubscriberSet>;
     readonly ownmap: Map<any, ISubscriberSet>;
@@ -71,6 +75,7 @@ declare class Observer<T extends object = any> {
 declare class Subscriber {
     fn: Function;
     option: SUBSCRIBE_OPTION;
+    static get PARENT(): Subscriber;
     parent: Subscriber;
     children: Array<Subscriber>;
     constructor(fn: Function, option?: SUBSCRIBE_OPTION);
@@ -100,6 +105,6 @@ declare const runInSandbox: ReflectCall;
 declare function autorun(fn: Function): () => void;
 declare function observable<T = IOBTarget>(obj: T): T;
 declare function computed(calc: Function): () => any;
-declare function watch(handle: Function, watcher: (new_value: any, old_value: any) => void): () => void;
+declare function watch(handle: Function, watcher: (new_value: any, old_value: any) => void, immediately?: boolean): () => void;
 declare function reaction(handle: Function, watcher: (val: any) => void): () => void;
-export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, transacts, TRANSACTS_OPTION, SANDOBX_OPTION, SUBSCRIBE_OPTION, computed, watch, reaction };
+export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, transacts, TRANSACTS_OPTION, SANDOBX_OPTION, SUBSCRIBE_OPTION, computed, watch, reaction, MASK_ITERATE, MASK_UNDEFINED, RECORD_TYPE };
