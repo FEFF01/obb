@@ -64,8 +64,9 @@ function log(expr: any, ...values: any) {
 
 console.log("" + observable(new Date()))
 
-
-
+autorun(() => {
+    console.log(Subscriber.PARENT)
+});
 
 let a = observable([1, 2, 3]);
 

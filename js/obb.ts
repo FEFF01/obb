@@ -217,8 +217,10 @@ class Observer<T extends object = any> {
                         this.notify(prop, false, RECORD_TYPE.OWN);
                         this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
                     }
-                    eq || this.notify(prop, bak_value);
-                    (eq && own) || this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+                    if (!eq) {
+                        this.notify(prop, bak_value);
+                    }
+                    //this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
                 })
             }
 
@@ -239,7 +241,7 @@ class Observer<T extends object = any> {
                     this.notify(key, target[key]);
                     this.notify(key, true, RECORD_TYPE.OWN);
                     this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
-                    this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+                    //this.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
                 }
                 return delete target[key];
             });
@@ -779,14 +781,18 @@ function obArray(ob: Observer<ArrayLike<any>>) {
                 function (key) {
                     const original = prototype[key];
                     return original && [key, function () {
-                        ob.collect(MASK_ITERATE, RECORD_TYPE.REF);
+                        //ob.collect(MASK_ITERATE, RECORD_TYPE.REF);
+                        ob.collect(MASK_ITERATE, RECORD_TYPE.OWN)
                         let index = 0;
                         let proxy = ob.proxy;
                         return {
                             next() {
                                 let done = index >= target.length;
                                 let value: any;
-                                done || (value = proxy[index++]);
+                                if (!done) {
+                                    ob.collect(index);
+                                    value = proxy[index++];
+                                }
                                 return { done, value }
                             }
                         }
@@ -828,6 +834,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
     let _size = Object.getOwnPropertyDescriptor(prototype, "size")
         ?.get.bind(target)
         || function () { };
+    let is_map = target instanceof Map || target instanceof WeakMap;
 
     ob.release = function () {
         internal_ob.release();
@@ -836,7 +843,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
 
     internal_ob._has = prototype.has.bind(target);
 
-    if (target instanceof Map || target instanceof WeakMap) {
+    if (is_map) {
 
         internal_ob._val = function (key: any) {
             return prototype.get.call(target, key);;
@@ -857,6 +864,14 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
             return prototype.add.call(target, key);
         }
 
+    function gen_enters_value(value: [any, any]) {
+        internal_ob.collect(value[0]);
+        return [value[0], observable(value[1])];
+    }
+    function gen_value(value: [any, any]) {
+        internal_ob.collect(value[0]);
+        return observable(value[1]);
+    }
     let proxyMethods = {
         get(key: any) {
             /*let kob = OBSERVER_MAP.get(key);
@@ -878,7 +893,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                         internal_ob.notify(key, false, RECORD_TYPE.OWN);
                         internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
                     }
-                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+                    //internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
                     internal_ob.notify(key, bak_value);
                 });
             }
@@ -894,7 +909,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     internal_ob.notify(key, false, RECORD_TYPE.OWN)
                     internal_ob.notify(key, MASK_UNDEFINED);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
-                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+                    //internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
                 });
             }
             return this;
@@ -910,7 +925,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     internal_ob.notify(key, value);
                     internal_ob.notify(key, true, RECORD_TYPE.OWN);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
-                    internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+                    //internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
 
                     size !== undefined && ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
                 });
@@ -931,7 +946,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     }
                 )
                 internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
-                internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+                //internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
                 ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
 
                 prototype.clear.call(target);
@@ -939,7 +954,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         },
         forEach(cb: Function, ...args: any) {
             internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
-            internal_ob.collect(MASK_ITERATE, RECORD_TYPE.REF);
+            //internal_ob.collect(MASK_ITERATE, RECORD_TYPE.REF);
             return prototype.forEach.call(target, function (value: any, ...rest: any) {
                 cb(observable(value), ...rest)
             }, ...args);
@@ -953,40 +968,21 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         },
         size: _size,
         ...[
-            [
-                "keys",
-                (value: [any, any]) => value[0],
-                [RECORD_TYPE.OWN]
-            ],
-            [
-                "entries",
-                (value: [any, any]) => [value[0], observable(value[1])],
-                [RECORD_TYPE.OWN, RECORD_TYPE.REF]
-            ],
-            [
-                "values",
-                (value: [any, any]) => observable(value[1]),
-                [RECORD_TYPE.REF]
-            ],
-            [
-                Symbol.iterator,
-                (value: [any, any]) => observable(value[1]),
-                [RECORD_TYPE.OWN, RECORD_TYPE.REF]
-            ]
+            ["keys", (value: [any, any]) => value[0]],
+            ["entries", gen_enters_value],
+            ["values", gen_value],
+            [Symbol.iterator, is_map ? gen_enters_value : gen_value]
         ].reduce(
-            function (res, [key, _value, types]: [string | symbol, any, any]) {
+            function (res, [key, _value]: [string | symbol, any]) {
                 let original = prototype["entries"/*key*/];
                 if (original) {
                     res[key] = function () {
-                        for (let type of types) {
-                            internal_ob.collect(MASK_ITERATE, type);
-                        }
-
+                        internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
+                        
                         let iterator = original.call(target);
                         let originalNext = iterator.next.bind(iterator);
                         iterator.next = function () {
                             let { done, value } = originalNext();
-
                             if (!done) {
                                 value = _value(value);
                             }
