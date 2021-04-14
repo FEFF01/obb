@@ -76,6 +76,7 @@ declare class Subscriber {
     fn: Function;
     option: SUBSCRIBE_OPTION;
     static get PARENT(): Subscriber;
+    depth: number;
     parent: Subscriber;
     children: Array<Subscriber>;
     constructor(fn: Function, option?: SUBSCRIBE_OPTION);
@@ -104,7 +105,7 @@ declare function sandbox<T = Function>(fn: T, option?: SANDOBX_OPTION): T;
 declare const runInSandbox: ReflectCall;
 declare function autorun(fn: Function): () => void;
 declare function observable<T = IOBTarget>(obj: T): T;
-declare function computed(calc: Function): () => any;
+declare function computed(calc: Function, parent?: Subscriber): () => any;
 declare function watch(handle: Function, watcher: (new_value: any, old_value: any) => void, immediately?: boolean): () => void;
 declare function reaction(handle: Function, watcher: (val: any) => void): () => void;
 export { Observer, Subscriber, observable, autorun, atom, runInAtom, action, runInAction, sandbox, runInSandbox, transacts, TRANSACTS_OPTION, SANDOBX_OPTION, SUBSCRIBE_OPTION, computed, watch, reaction, MASK_ITERATE, MASK_UNDEFINED, RECORD_TYPE };

@@ -166,10 +166,20 @@ class Observer<T extends object = any> {
 
         let set = this._map(type).get(prop);
         if (set && set.size) {
-            let reactions = Array.from(set);
-            ACTION_STACK.length
-                ? addRecord(reactions, record)
-                : deepReactive(reactions);
+            if (ACTION_STACK.length) {
+                set.forEach(
+                    sub => sub.addRecord(record)
+                );
+            } else {
+                let reactions: Array<Subscriber>;
+                let min_depth = Number.MAX_SAFE_INTEGER;
+                set.forEach(sub => {
+                    reactions.push(sub);
+                    min_depth > sub.depth && (min_depth = sub.depth);
+                });
+                deepReactive(reactions, min_depth);
+            }
+
         }
     }
 
@@ -254,6 +264,7 @@ class Subscriber {
     static get PARENT() {
         return SUBSCRIBER_STACK[0];
     }
+    depth = 0;
     parent: Subscriber;
     children: Array<Subscriber> = [];
     constructor(
@@ -271,10 +282,9 @@ class Subscriber {
         set.add(this);
         if (
             this.option & SUBSCRIBE_OPTION.COMPUTED
-            && SUBSCRIBER_STACK.length > 1
-            && !(SUBSCRIBER_STACK[1].option & SUBSCRIBE_OPTION.PREVENT_COLLECT)
+            && this.parent && this.parent.parent !== undefined
         ) {
-            SUBSCRIBER_STACK[1].depend(set);    // 0 为 computed 的当前订阅
+            this.parent.depend(set);
         }
     }
     clear(shallow?: boolean) {
@@ -318,6 +328,7 @@ class Subscriber {
                 this.parent = undefined;
                 return this;
             }
+            this.depth = this.parent.depth + 1;
         } else {
             this.parent = null
         }
@@ -344,6 +355,13 @@ class Subscriber {
             REACTION_TARGET_LIST.unshift(this);
         } else {
             REACTION_STATE_LIST[index][REACTION_STATE.RECORDS].push(record);
+        }
+
+        if (
+            this.option & SUBSCRIBE_OPTION.COMPUTED
+            && this.parent && this.parent.parent !== undefined
+        ) {
+            this.parent.addRecord(record);
         }
     }
     is_run = false;
@@ -545,15 +563,17 @@ function observable<T = IOBTarget>(obj: T): T {
     return obj;
 }
 
-function computed(calc: Function) {
+function computed(calc: Function, parent: Subscriber = null) {
     let value: any;
     let changed = 0;
     let subscriber = new Subscriber(
         function () {
-            (changed ^= 1) && (value = calc());
+            if (changed ^= 1) {
+                value = calc();
+            }
         }, SUBSCRIBE_OPTION.COMPUTED
     );
-    subscriber.parent = null;
+    subscriber.parent = parent;
     return function () {
         changed || subscriber.update();
         return value;
@@ -653,6 +673,7 @@ function diffRecords(records: Array<IRecord>, callback?: Function) {
 function transacted() {
 
     let reactions = [];
+    let reaction_depth = Number.MAX_SAFE_INTEGER;
 
     let action = ACTION_STACK.shift();
     let depth = action[ACTION.DEPTH];
@@ -685,6 +706,7 @@ function transacted() {
                 REACTION_TARGET_LIST.splice(index, 1);
                 REACTION_STATE_LIST.splice(index, 1);
             }
+            reaction_depth = Math.min(reaction_depth, subscriber.depth);
             reactions.unshift(subscriber);
         }
     }
@@ -693,22 +715,16 @@ function transacted() {
     if (reactions.length) {
         if (action[ACTION.TYPE] & TRANSACTS_OPTION.WRAPUP) {
             runInAction(function () {
-                deepReactive(reactions);
+                deepReactive(reactions, reaction_depth);
             });
         } else {
-            deepReactive(reactions);
+            deepReactive(reactions, reaction_depth);
         }
     }
 }
 
-function addRecord(reactions: Array<Subscriber>, record: IRecord) {
-    for (let i = 0; i < reactions.length; i++) {
-        reactions[i].addRecord(record);
-    }
-}
-
-function deepReactive(reactions: Array<Subscriber>) {
-
+function deepReactive(reactions: Array<Subscriber>, min_depth: number = 0) {
+    
     let sandbox = SANDBOX_STACK[0];
     let includes = sandbox
         && sandbox[SANDBOX.OPTION] & SANDOBX_OPTION.CLEAN_CHANGE
@@ -726,7 +742,7 @@ function deepReactive(reactions: Array<Subscriber>) {
             sub.update();
             continue;
         }
-        while ((sub = sub.parent)) {
+        while ((sub = sub.parent) && sub.depth >= min_depth) {
             if (sub.is_run || !inScoped(sub)) {
                 break;
             }
@@ -874,8 +890,6 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
     }
     let proxyMethods = {
         get(key: any) {
-            /*let kob = OBSERVER_MAP.get(key);
-            kob && (key = kob.target);*/
 
             internal_ob.collect(key);
             return observable(prototype.get.call(target, key));
@@ -893,7 +907,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                         internal_ob.notify(key, false, RECORD_TYPE.OWN);
                         internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
                     }
-                    //internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+
                     internal_ob.notify(key, bak_value);
                 });
             }
@@ -909,7 +923,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     internal_ob.notify(key, false, RECORD_TYPE.OWN)
                     internal_ob.notify(key, MASK_UNDEFINED);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
-                    //internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+
                 });
             }
             return this;
@@ -925,7 +939,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     internal_ob.notify(key, value);
                     internal_ob.notify(key, true, RECORD_TYPE.OWN);
                     internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
-                    //internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+
 
                     size !== undefined && ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
                 });
@@ -946,7 +960,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                     }
                 )
                 internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.OWN);
-                //internal_ob.notify(MASK_ITERATE, MASK_ITERATE, RECORD_TYPE.REF);
+
                 ob.notify("size", size, RECORD_TYPE.REF_AND_READONLY);
 
                 prototype.clear.call(target);
@@ -954,7 +968,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
         },
         forEach(cb: Function, ...args: any) {
             internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
-            //internal_ob.collect(MASK_ITERATE, RECORD_TYPE.REF);
+
             return prototype.forEach.call(target, function (value: any, ...rest: any) {
                 cb(observable(value), ...rest)
             }, ...args);
@@ -978,7 +992,7 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
                 if (original) {
                     res[key] = function () {
                         internal_ob.collect(MASK_ITERATE, RECORD_TYPE.OWN);
-                        
+
                         let iterator = original.call(target);
                         let originalNext = iterator.next.bind(iterator);
                         iterator.next = function () {
