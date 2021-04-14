@@ -582,16 +582,18 @@ function computed(calc: Function, parent: Subscriber = null) {
 
 function watch(
     handle: Function,
-    watcher: (new_value: any, old_value: any) => void,
+    watcher: (new_value: any, old_value?: any) => void,
     immediately?: boolean
 ) {
     let value_stack: Array<any> = [];
 
     let subscriber = new Subscriber(function () {
         value_stack.unshift(handle());
-        if (immediately || value_stack.length > 1) {
+        if (value_stack.length > 1) {
             let [new_val, old_val] = value_stack;
             equal(new_val, old_val) || watcher(new_val, old_val);
+        } else if (value_stack.length === 1 && immediately) {
+            watcher(value_stack[0]);
         }
         value_stack.length = 1;
     });
@@ -724,7 +726,7 @@ function transacted() {
 }
 
 function deepReactive(reactions: Array<Subscriber>, min_depth: number = 0) {
-    
+
     let sandbox = SANDBOX_STACK[0];
     let includes = sandbox
         && sandbox[SANDBOX.OPTION] & SANDOBX_OPTION.CLEAN_CHANGE
