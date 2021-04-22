@@ -38,17 +38,15 @@ const enum TRANSACTS_OPTION {
     WRAPUP = 8,
     PLAIN = 16 | ATOM
 }
+/*
 type TRANSACTS_CONFIG = TRANSACTS_OPTION | {
     option: TRANSACTS_OPTION,
     hook?: (reactions: Array<Subscriber>) => void
-}
+}*/
 const enum ACTION {
-    DEPTH = 0,
-    TYPE = 1,
-    HOOK = 2
+    TYPE = 0
 }
 interface IAction {
-    [ACTION.DEPTH]: number,
     [ACTION.TYPE]: TRANSACTS_OPTION,
 }
 
@@ -292,13 +290,30 @@ class Subscriber {
         this._deps.clear();
         if (!shallow) {
             for (let child of this.children) {
+                child.emit("unmount");
                 child.clear();
                 child.parent = undefined;
             }
         }
         this.children.length = 0;
     }
+    private _once: Record<string, Array<Function>> = {};
+    once(event: string, callback: Function) {
+        let once_map = this._once;
+        (once_map[event] || (once_map[event] = [])).push(callback);
+    }
+    emit(event: string) {
+        let once_map = this._once;
+        let tasks = once_map[event];
+        if (tasks) {
+            for (let task of tasks) {
+                task();
+            }
+            delete once_map[event];
+        }
+    }
     unmount(shallow?: boolean) {    // shallow 参数暂时用于节省不必要的消耗
+        this.emit("unmount");
         this.clear(shallow);
         if (!shallow) {
             let siblings = this.parent && this.parent.children;
@@ -342,16 +357,19 @@ class Subscriber {
         return this;
     }
     update() {
+        //this.emit("update");
         this.clear();
         return this._run();
     }
     addRecord(record: IRecord) {
 
-        let depth = ACTION_STACK[0][ACTION.DEPTH];
         let index = REACTION_TARGET_LIST.indexOf(this);
 
-        if (index < 0 || REACTION_STATE_LIST[index][REACTION_STATE.DEPTH] < depth) {
-            REACTION_STATE_LIST.unshift([depth, [record]]);
+        if (
+            index < 0
+            || REACTION_STATE_LIST[index][REACTION_STATE.DEPTH] < ACTION_STACK.length
+        ) {
+            REACTION_STATE_LIST.unshift([ACTION_STACK.length, [record]]);
             REACTION_TARGET_LIST.unshift(this);
         } else {
             REACTION_STATE_LIST[index][REACTION_STATE.RECORDS].push(record);
@@ -394,7 +412,7 @@ function ownKeys(obj: any) {
 }
 
 
-function transacts(option: TRANSACTS_CONFIG, fn: Function, ...args: Array<any>) {
+function transacts(option: TRANSACTS_OPTION, fn: Function, ...args: Array<any>) {
     transacting(option);
     try {
         return fn(...args);
@@ -615,24 +633,15 @@ function reaction(handle: Function, watcher: (val: any) => void) {
 
 
 function transacting(
-    option?: TRANSACTS_CONFIG
+    option?: TRANSACTS_OPTION
 ) {
     let action = ACTION_STACK[0];
-    let hook: Function;
     if (option === undefined) {
         option = action
             ? action[ACTION.TYPE] & TRANSACTS_OPTION.ATOM
             : TRANSACTS_OPTION.DEFAULT;
-    } else if (typeof option !== "number") {
-        hook = option.hook;
-        option = option.option;
     }
-
-    ACTION_STACK.unshift([
-        ACTION_STACK.length,
-        option,
-        hook
-    ]);
+    ACTION_STACK.unshift([option]);
 
 }
 
@@ -662,6 +671,7 @@ function diffRecords(records: Array<IRecord>, callback?: Function) {
         ) {
             continue;
         }
+
         if (!callback) {
             return true;
         } else if (callback(record) === -1) {
@@ -677,17 +687,45 @@ function transacted() {
     let reactions = [];
     let reaction_depth = Number.MAX_SAFE_INTEGER;
 
+    let depth = ACTION_STACK.length;
     let action = ACTION_STACK.shift();
-    let depth = action[ACTION.DEPTH];
-    let hook = action[ACTION.HOOK];
+
     if (
-        ACTION_STACK.length !== 0
+        depth > 1
         && (
             action[ACTION.TYPE] & (TRANSACTS_OPTION.PLAIN & ~TRANSACTS_OPTION.ATOM)
             || action[ACTION.TYPE] & TRANSACTS_OPTION.ATOM
             && ACTION_STACK[0][ACTION.TYPE] & TRANSACTS_OPTION.ATOM
         )
     ) {
+
+        let attach_reaction_state_list = [];
+        let attach_reaction_target_list = [];
+        while (
+            REACTION_TARGET_LIST.length
+            && REACTION_STATE_LIST[0][REACTION_STATE.DEPTH] >= depth
+        ) {
+            let subscriber = REACTION_TARGET_LIST.shift();
+            let state = REACTION_STATE_LIST.shift();
+            let index = REACTION_TARGET_LIST.indexOf(subscriber);
+
+            if (index < 0 || REACTION_STATE_LIST[index][REACTION_STATE.DEPTH] >= depth) {
+
+                attach_reaction_state_list.push(
+                    [depth - 1, state[REACTION_STATE.RECORDS]]
+                );
+                attach_reaction_target_list.push(subscriber);
+            } else {
+                REACTION_STATE_LIST[index][REACTION_STATE.RECORDS].push(
+                    ...state[REACTION_STATE.RECORDS]
+                );
+            }
+        }
+        if (attach_reaction_target_list.length) {
+            REACTION_STATE_LIST.unshift(...attach_reaction_state_list);
+            REACTION_TARGET_LIST.unshift(...attach_reaction_target_list);
+        }
+
         return;
     }
     while (
@@ -713,14 +751,13 @@ function transacted() {
         }
     }
 
-    hook && hook(reactions);
     if (reactions.length) {
-        if (action[ACTION.TYPE] & TRANSACTS_OPTION.WRAPUP) {
+        if (!(action[ACTION.TYPE] & TRANSACTS_OPTION.WRAPUP)) {
+            deepReactive(reactions, reaction_depth);
+        } else {
             runInAction(function () {
                 deepReactive(reactions, reaction_depth);
             });
-        } else {
-            deepReactive(reactions, reaction_depth);
         }
     }
 }
@@ -779,7 +816,6 @@ function equal(a: any, b: any) {
 function obArray(ob: Observer<ArrayLike<any>>) {
     let target = ob.target;
     let prototype = target.__proto__;
-    let original = ob._proxy_handler.set;
 
     target.__proto__ = Object.create(
         prototype,
@@ -826,11 +862,12 @@ function obArray(ob: Observer<ArrayLike<any>>) {
         )
     );
 
+    let original = ob._proxy_handler.set;
     ob._proxy_handler.set = function (_target: IOBTarget, key: any, value: any) {
         let length = target.length;
         return _runInPlain(function () {
             let res = original(_target, key, value);
-            target.length !== length
+            target.length !== length && key !== "length"
                 && ob.notify("length", length, RECORD_TYPE.REF_AND_VOLATILE);
 
             return res;
@@ -1031,6 +1068,27 @@ function obInternalData(ob: Observer<IOBInternalObject>) {
     target.__proto__ = Object.create(target.__proto__.__proto__, descriptors);
 }
 
+let obb = {
+    Observer,
+    Subscriber,
+    observable,
+    autorun,
+    atom,
+    runInAtom,
+    action,
+    runInAction,
+    sandbox,
+    runInSandbox,
+    transacts,
+    SUBSCRIBE_OPTION,
+    computed,
+    watch,
+    reaction,
+    MASK_ITERATE,
+    MASK_UNDEFINED,
+};
+
+(<any>GLOBAL)._obb = obb;
 
 export {
     Observer,
