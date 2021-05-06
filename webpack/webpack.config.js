@@ -34,7 +34,7 @@ module.exports = {
         filename: 'js/[name].js',
         chunkFilename: 'js/[id].js',
         //globalObject: "this",
-        libraryTarget: "umd"
+        libraryTarget: "commonjs"
     },
     module: {
         unknownContextCritical: false,
